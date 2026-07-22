@@ -3,5 +3,5 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/ezri-file-system-/",
+  base: "/ezfilesystem.io/",
 });
