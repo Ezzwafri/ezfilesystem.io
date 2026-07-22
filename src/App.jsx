@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase, createDetachedClient } from "./supabaseClient";
 
 const FILE_STATUSES = ["Searching", "Found", "Pending Delivery", "Delivered"];
-const PAY_STATUSES = ["Pending", "Billing", "Billed", "Pending Payment", "Payed"];
+const PAY_STATUSES = ["Pending", "Billing", "Billed", "Pending Payment", "Paid"];
 const STATUS_COLORS = {
   Pending: "#f59e0b", Searching: "#3b82f6", Found: "#10b981",
   "Pending Delivery": "#f97316", Delivered: "#059669",
-  Billing: "#8b5cf6", Billed: "#6366f1", "Pending Payment": "#f97316", Payed: "#10b981",
+  Billing: "#8b5cf6", Billed: "#6366f1", "Pending Payment": "#f97316", Paid: "#10b981",
   Request: "#ec4899",
 };
 
