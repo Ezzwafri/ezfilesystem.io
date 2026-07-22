@@ -398,7 +398,8 @@ export default function App() {
     if (error) throw new Error(error.message);
     const matchingFile = findFileByCaseRef(caseRef, files);
     if (matchingFile) {
-      await supabase.rpc("set_file_requester", { p_case_reference: caseRef, p_requested_by: profile.id, p_requested_by_name: profile.name });
+      const { error: rpcError } = await supabase.rpc("set_file_requester", { p_case_reference: caseRef, p_requested_by: profile.id, p_requested_by_name: profile.name });
+      if (rpcError) showToast(`Request saved, but couldn't tag the file: ${rpcError.message}`);
     }
     await Promise.all([fetchRequests(), fetchFiles()]);
   };
