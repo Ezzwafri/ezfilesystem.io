@@ -198,6 +198,21 @@ function FileEditModal({ file, remark, setRemark, onClose, updateFileField, addR
   );
 }
 
+function RequestDetailModal({ request, onClose }) {
+  return (
+    <Modal title="Request Details" onClose={onClose}>
+      <div style={{ display: "grid", gap: 12 }}>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Client Name</span><div style={{ fontWeight: 600 }}>{request.clientName}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{request.caseReference}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Use Type</span><div style={{ fontWeight: 600 }}>{request.useType}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span><div style={{ fontWeight: 600 }}>{request.requestedByName || "—"}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested At</span><div>{request.requestedAt ? new Date(request.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div></div>
+        <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>This case hasn't been added to the file system yet.</p>
+      </div>
+    </Modal>
+  );
+}
+
 function FileViewModal({ file, onClose }) {
   return (
     <Modal title="File Details" onClose={onClose}>
@@ -706,10 +721,12 @@ function PICPanel({ profile, files, requests, submitRequest, showToast, changeMy
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
   const [viewFileId, setViewFileId] = useState(null);
+  const [viewRequestId, setViewRequestId] = useState(null);
   const [form, setForm] = useState({ caseRef: "", clientName: "", useType: "Office Use" });
   const [busy, setBusy] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
+  const viewRequest = requests.find(r => r.id === viewRequestId) || null;
   const myRequests = requests.filter(r => r.requestedBy === profile.id);
   const activeRequests = myRequests.filter(r => r.status !== "Delivered");
   const deliveredRequests = myRequests.filter(r => r.status === "Delivered");
@@ -730,7 +747,7 @@ function PICPanel({ profile, files, requests, submitRequest, showToast, changeMy
 
   const viewRequestFile = (r) => {
     const f = findFileByCaseRef(r.caseReference, files);
-    if (!f) return showToast("No file record yet for this case");
+    if (!f) return setViewRequestId(r.id);
     setViewFileId(f.id);
   };
 
@@ -806,6 +823,7 @@ function PICPanel({ profile, files, requests, submitRequest, showToast, changeMy
       )}
 
       {viewFile && <FileViewModal file={viewFile} onClose={() => setViewFileId(null)} />}
+      {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} showToast={showToast} changeMyPassword={changeMyPassword} />}
     </div>
@@ -818,11 +836,13 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
   const [viewFileId, setViewFileId] = useState(null);
+  const [viewRequestId, setViewRequestId] = useState(null);
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [remark, setRemark] = useState("");
   const [busy, setBusy] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
+  const viewRequest = requests.find(r => r.id === viewRequestId) || null;
   const activeRequests = requests.filter(r => r.status !== "Delivered");
   const deliveredRequests = requests.filter(r => r.status === "Delivered");
 
@@ -842,7 +862,7 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
 
   const viewRequestFile = (r) => {
     const f = findFileByCaseRef(r.caseReference, files);
-    if (!f) return showToast("Add this case as a file first, from the Add File tab");
+    if (!f) return setViewRequestId(r.id);
     setViewFileId(f.id);
     setRemark(f.remarks || "");
   };
@@ -923,6 +943,7 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
       {viewFile && (
         <FileEditModal file={viewFile} remark={remark} setRemark={setRemark} onClose={() => setViewFileId(null)} updateFileField={updateFileField} addRemark={addRemark} />
       )}
+      {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} showToast={showToast} changeMyPassword={changeMyPassword} />}
     </div>
