@@ -128,6 +128,14 @@ create policy "admins can delete requests"
   on public.requests for delete
   using (public.current_role() = 'admin');
 
+create policy "pic can remove own delivered requests"
+  on public.requests for delete
+  using (
+    public.current_role() = 'pic'
+    and requested_by = auth.uid()
+    and status = 'Delivered'
+  );
+
 -- ── Realtime ────────────────────────────────────────────
 
 alter publication supabase_realtime add table public.files;
