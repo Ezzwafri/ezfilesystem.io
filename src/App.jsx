@@ -43,6 +43,17 @@ function requestDisplayStatus(request, files) {
   const file = findFileByCaseRef(request.caseReference, files);
   return (file && file.status) || "Request";
 }
+function extractYear(caseRef) {
+  const match = (caseRef || "").match(/(19|20)\d{2}/);
+  return match ? parseInt(match[0], 10) : 0;
+}
+function sortFilesByYear(files) {
+  return files.slice().sort((a, b) => extractYear(b.caseReference) - extractYear(a.caseReference));
+}
+const REQUEST_STATUS_ORDER = ["Request", "Searching", "Found", "Pending Delivery"];
+function sortRequestsByStatus(reqs, files) {
+  return reqs.slice().sort((a, b) => REQUEST_STATUS_ORDER.indexOf(requestDisplayStatus(a, files)) - REQUEST_STATUS_ORDER.indexOf(requestDisplayStatus(b, files)));
+}
 function splitLogs(logs) {
   const all = logs || [];
   return {
@@ -726,7 +737,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
       {tab === "files" && (
         <div>
           <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
-          <FileTable files={filteredFiles} requests={requests} onView={f => { setViewFileId(f.id); setRemark(f.remarks || ""); }} onDelete={handleDelete} />
+          <FileTable files={sortFilesByYear(filteredFiles)} requests={requests} onView={f => { setViewFileId(f.id); setRemark(f.remarks || ""); }} onDelete={handleDelete} />
         </div>
       )}
 
@@ -836,7 +847,7 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancel
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>My File Requests</h3>
             {activeRequests.length === 0 ? <Card><p style={{ color: "#94a3b8", textAlign: "center" }}>No requests yet</p></Card> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {activeRequests.map(r => (
+                {sortRequestsByStatus(activeRequests, files).map(r => (
                   <Card key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                     <div>
                       <div style={{ fontWeight: 600, color: "#1e293b" }}>{r.clientName}</div>
@@ -881,7 +892,7 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancel
       {tab === "files" && (
         <div>
           <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
-          <FileTable files={filtered} requests={requests} onView={f => setViewFileId(f.id)} onRequest={handleRequest} />
+          <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => setViewFileId(f.id)} onRequest={handleRequest} />
         </div>
       )}
 
@@ -965,7 +976,7 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
             {activeRequests.length === 0 ? <Card><p style={{ color: "#94a3b8", textAlign: "center" }}>No requests yet</p></Card> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {activeRequests.map(r => (
+                {sortRequestsByStatus(activeRequests, files).map(r => (
                   <Card key={r.id}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", flexWrap: "wrap", gap: 12 }}>
                       <div>
@@ -1017,7 +1028,7 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
       {tab === "files" && (
         <div>
           <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
-          <FileTable files={filtered} requests={requests} onView={f => { setViewFileId(f.id); setRemark(f.remarks || ""); }} />
+          <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => { setViewFileId(f.id); setRemark(f.remarks || ""); }} />
         </div>
       )}
 
