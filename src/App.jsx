@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase, createDetachedClient } from "./supabaseClient";
 
-const REQUEST_STATUSES = ["Pending", "Searching", "Found", "Pending Delivery", "Delivered"];
 const FILE_STATUSES = ["Searching", "Found", "Pending Delivery", "Delivered"];
-const PAY_STATUSES = ["Pending", "Billing", "Billed", "Payed"];
+const PAY_STATUSES = ["Pending", "Billing", "Billed", "Pending Payment", "Payed"];
 const STATUS_COLORS = {
   Pending: "#f59e0b", Searching: "#3b82f6", Found: "#10b981",
   "Pending Delivery": "#f97316", Delivered: "#059669",
-  Billing: "#8b5cf6", Billed: "#6366f1", Payed: "#10b981",
+  Billing: "#8b5cf6", Billed: "#6366f1", "Pending Payment": "#f97316", Payed: "#10b981",
   Request: "#ec4899",
 };
 
@@ -39,6 +38,10 @@ function activeRequestFor(file, requests) {
 }
 function findFileByCaseRef(caseRef, files) {
   return files.find(f => normalizeRef(f.caseReference) === normalizeRef(caseRef)) || null;
+}
+function requestDisplayStatus(request, files) {
+  const file = findFileByCaseRef(request.caseReference, files);
+  return (file && file.status) || "Request";
 }
 
 const Badge = ({ text, color }) => (
@@ -333,10 +336,14 @@ export default function App() {
     return mapFile(data);
   };
 
-  const deleteFile = async (fileId) => {
-    const { error } = await supabase.from("files").delete().eq("id", fileId);
+  const deleteFile = async (file) => {
+    const { error } = await supabase.from("files").delete().eq("id", file.id);
     if (error) return showToast(error.message);
-    await fetchFiles();
+    const linkedRequests = requests.filter(r => normalizeRef(r.caseReference) === normalizeRef(file.caseReference));
+    if (linkedRequests.length > 0) {
+      await supabase.from("requests").delete().in("id", linkedRequests.map(r => r.id));
+    }
+    await Promise.all([fetchFiles(), fetchRequests()]);
     showToast("File deleted");
   };
 
@@ -345,7 +352,13 @@ export default function App() {
     const log = { time: ts(), action: `${field} changed to "${value}"`, by: profile.name };
     const { error } = await supabase.from("files").update({ [dbField]: value, logs: [...(file.logs || []), log] }).eq("id", file.id);
     if (error) return showToast(error.message);
-    await fetchFiles();
+    if (field === "status" && value === "Delivered") {
+      const openRequests = requests.filter(r => r.status !== "Delivered" && normalizeRef(r.caseReference) === normalizeRef(file.caseReference));
+      if (openRequests.length > 0) {
+        await supabase.from("requests").update({ status: "Delivered" }).in("id", openRequests.map(r => r.id));
+      }
+    }
+    await Promise.all([fetchFiles(), fetchRequests()]);
     showToast(`${field} updated`);
   };
 
@@ -365,13 +378,6 @@ export default function App() {
     });
     if (error) throw new Error(error.message);
     await fetchRequests();
-  };
-
-  const updateRequestStatus = async (requestId, newStatus) => {
-    const { error } = await supabase.from("requests").update({ status: newStatus }).eq("id", requestId);
-    if (error) return showToast(error.message);
-    await fetchRequests();
-    showToast(`Request status updated to ${newStatus}`);
   };
 
   if (booting) return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "Inter, system-ui, sans-serif", color: "#64748b" }}>Loading...</div>;
@@ -401,7 +407,7 @@ export default function App() {
 
   if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} updateFileField={updateFileField} addRemark={addRemark} deleteFile={deleteFile} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (profile.role === "pic") return shell(<PICPanel profile={profile} files={files} requests={requests} submitRequest={submitRequest} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "op") return shell(<OPPanel profile={profile} files={files} requests={requests} addFile={addFile} updateFileField={updateFileField} addRemark={addRemark} updateRequestStatus={updateRequestStatus} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "op") return shell(<OPPanel profile={profile} files={files} requests={requests} addFile={addFile} updateFileField={updateFileField} addRemark={addRemark} showToast={showToast} changeMyPassword={changeMyPassword} />);
 }
 
 /* ── LOGIN ─────────────────────────────────────────────── */
@@ -520,7 +526,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
 
   const handleDelete = (f) => {
     if (!window.confirm(`Delete the file for "${f.clientName}" (Case: ${f.caseReference})? This cannot be undone.`)) return;
-    deleteFile(f.id);
+    deleteFile(f);
     setViewFileId(null);
   };
 
@@ -717,7 +723,7 @@ function PICPanel({ profile, files, requests, submitRequest, showToast, changeMy
         <div style={{ fontSize: 12, color: "#94a3b8" }}>{r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Badge text={r.status} color={STATUS_COLORS[r.status] || "#94a3b8"} />
+        <Badge text={requestDisplayStatus(r, files)} color={STATUS_COLORS[requestDisplayStatus(r, files)] || "#94a3b8"} />
         <Btn variant="secondary" onClick={() => viewRequestFile(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
       </div>
     </Card>
@@ -783,7 +789,7 @@ function PICPanel({ profile, files, requests, submitRequest, showToast, changeMy
 }
 
 /* ── OP PANEL ─────────────────────────────────────────── */
-function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark, updateRequestStatus, showToast, changeMyPassword }) {
+function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
@@ -831,11 +837,7 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
           <div style={{ fontSize: 12, color: "#94a3b8" }}>Requested by {r.requestedByName} · {r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <Badge text={r.status} color={STATUS_COLORS[r.status] || "#94a3b8"} />
-          <select value={r.status} onChange={e => updateRequestStatus(r.id, e.target.value)}
-            style={{ padding: "4px 8px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 12 }}>
-            {REQUEST_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <Badge text={requestDisplayStatus(r, files)} color={STATUS_COLORS[requestDisplayStatus(r, files)] || "#94a3b8"} />
           <Btn variant="secondary" onClick={() => viewRequestFile(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
         </div>
       </div>

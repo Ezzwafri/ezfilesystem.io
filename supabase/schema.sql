@@ -106,6 +106,10 @@ create policy "op and admin can update requests"
   on public.requests for update
   using (public.current_role() in ('op', 'admin'));
 
+create policy "admins can delete requests"
+  on public.requests for delete
+  using (public.current_role() = 'admin');
+
 -- ── Realtime ────────────────────────────────────────────
 
 alter publication supabase_realtime add table public.files;
