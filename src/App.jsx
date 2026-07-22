@@ -398,7 +398,7 @@ export default function App() {
     if (error) throw new Error(error.message);
     const matchingFile = findFileByCaseRef(caseRef, files);
     if (matchingFile) {
-      await supabase.from("files").update({ requested_by: profile.id, requested_by_name: profile.name }).eq("id", matchingFile.id);
+      await supabase.rpc("set_file_requester", { p_case_reference: caseRef, p_requested_by: profile.id, p_requested_by_name: profile.name });
     }
     await Promise.all([fetchRequests(), fetchFiles()]);
   };
