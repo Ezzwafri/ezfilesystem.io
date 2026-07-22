@@ -420,7 +420,8 @@ export default function App() {
       status: "Pending", requested_by: profile.id, requested_by_name: profile.name,
     });
     if (error) throw new Error(error.message);
-    await fetchRequests();
+    await supabase.rpc("log_file_request", { p_case_reference: file.caseReference, p_time: ts(), p_by: profile.name });
+    await Promise.all([fetchRequests(), fetchFiles()]);
   };
 
   const returnFile = async (file) => {
@@ -436,6 +437,16 @@ export default function App() {
     if (error) return showToast(error.message);
     await fetchRequests();
     showToast("Removed");
+  };
+
+  const cancelRequest = async (request, file) => {
+    const { error } = await supabase.from("requests").delete().eq("id", request.id);
+    if (error) return showToast(error.message);
+    if (file) {
+      await supabase.rpc("pic_return_file", { p_case_reference: file.caseReference, p_time: ts(), p_by: profile.name });
+    }
+    await Promise.all([fetchRequests(), fetchFiles()]);
+    showToast("Request cancelled");
   };
 
   if (booting) return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "Inter, system-ui, sans-serif", color: "#64748b" }}>Loading...</div>;
@@ -464,7 +475,7 @@ export default function App() {
   );
 
   if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} updateFileField={updateFileField} addRemark={addRemark} deleteFile={deleteFile} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "pic") return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} deleteRequest={deleteRequest} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "pic") return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} deleteRequest={deleteRequest} cancelRequest={cancelRequest} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (profile.role === "op") return shell(<OPPanel profile={profile} files={files} requests={requests} addFile={addFile} updateFileField={updateFileField} addRemark={addRemark} returnFile={returnFile} showToast={showToast} changeMyPassword={changeMyPassword} />);
 }
 
@@ -761,7 +772,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
 }
 
 /* ── PIC PANEL ────────────────────────────────────────── */
-function PICPanel({ profile, files, requests, requestFile, deleteRequest, showToast, changeMyPassword }) {
+function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancelRequest, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
@@ -792,6 +803,11 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, showTo
   const handleRemove = (r) => {
     if (!window.confirm(`Remove this delivered request for "${r.clientName}"?`)) return;
     deleteRequest(r.id);
+  };
+
+  const handleCancel = (r) => {
+    if (!window.confirm(`Cancel your request for "${r.clientName}" (Case: ${r.caseReference})?`)) return;
+    cancelRequest(r, findFileByCaseRef(r.caseReference, files));
   };
 
   const filtered = files.filter(f => {
@@ -826,6 +842,7 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, showTo
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <Badge text={requestDisplayStatus(r, files)} color={STATUS_COLORS[requestDisplayStatus(r, files)] || "#94a3b8"} />
                       <Btn variant="secondary" onClick={() => viewRequestFile(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
+                      <Btn variant="danger" onClick={() => handleCancel(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Cancel</Btn>
                     </div>
                   </Card>
                 ))}

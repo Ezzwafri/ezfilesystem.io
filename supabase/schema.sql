@@ -53,19 +53,43 @@ as $$
 $$;
 
 -- Lets any active staff member (including PIC, who has no general
--- files UPDATE permission) stamp who requested an existing file,
--- without granting broader edit access to the files table.
-create or replace function public.set_file_requester(p_case_reference text, p_requested_by uuid, p_requested_by_name text)
+-- files UPDATE permission) append a "Requested" log entry to a file,
+-- and lets PIC reset a file's status when cancelling their own
+-- request — without granting broader edit access to the files table.
+create or replace function public.log_file_request(p_case_reference text, p_time text, p_by text)
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
+begin
   update public.files
-  set requested_by = p_requested_by, requested_by_name = p_requested_by_name
+  set logs = logs || jsonb_build_object('time', p_time, 'action', 'status changed to "Requested"', 'by', p_by)
   where lower(trim(case_reference)) = lower(trim(p_case_reference))
     and public.current_role() is not null;
+end;
 $$;
+
+revoke all on function public.log_file_request(text, text, text) from public;
+grant execute on function public.log_file_request(text, text, text) to authenticated;
+
+create or replace function public.pic_return_file(p_case_reference text, p_time text, p_by text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.files
+  set status = null, payment_status = null,
+      logs = logs || jsonb_build_object('time', p_time, 'action', 'File returned — status reset', 'by', p_by)
+  where lower(trim(case_reference)) = lower(trim(p_case_reference))
+    and public.current_role() is not null;
+end;
+$$;
+
+revoke all on function public.pic_return_file(text, text, text) from public;
+grant execute on function public.pic_return_file(text, text, text) to authenticated;
 
 revoke all on function public.set_file_requester(text, uuid, text) from public;
 grant execute on function public.set_file_requester(text, uuid, text) to authenticated;
@@ -128,12 +152,11 @@ create policy "admins can delete requests"
   on public.requests for delete
   using (public.current_role() = 'admin');
 
-create policy "pic can remove own delivered requests"
+create policy "pic can remove own requests"
   on public.requests for delete
   using (
     public.current_role() = 'pic'
     and requested_by = auth.uid()
-    and status = 'Delivered'
   );
 
 -- ── Realtime ────────────────────────────────────────────
