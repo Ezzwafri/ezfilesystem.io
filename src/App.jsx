@@ -153,7 +153,7 @@ function FileTable({ files, requests, onView, onDelete }) {
   );
 }
 
-function FileEditModal({ file, remark, setRemark, onClose, updateFileField, addRemark, onDelete }) {
+function FileEditModal({ file, remark, setRemark, onClose, updateFileField, addRemark, onDelete, onClearRequester }) {
   return (
     <Modal title="File Details — Edit" onClose={onClose}>
       <div style={{ display: "grid", gap: 14 }}>
@@ -161,6 +161,15 @@ function FileEditModal({ file, remark, setRemark, onClose, updateFileField, addR
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 500 }}>{file.caseReference}</div></div>
           <div><span style={{ fontSize: 12, color: "#64748b" }}>Box Reference</span><div style={{ fontWeight: 500 }}>{file.boxReference}</div></div>
+        </div>
+        <div>
+          <span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontWeight: 500 }}>{file.requestedByName || "—"}</div>
+            {onClearRequester && file.requestedByName && (
+              <Btn variant="secondary" onClick={() => onClearRequester(file.id)} style={{ padding: "2px 8px", fontSize: 11 }}>Clear</Btn>
+            )}
+          </div>
         </div>
         <Select label="File Status" value={file.status || ""} onChange={e => updateFileField(file, "status", e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...FILE_STATUSES]} />
         <Select label="Payment Status" value={file.paymentStatus || ""} onChange={e => updateFileField(file, "paymentStatus", e.target.value)} options={[{ value: "", label: "— Select Payment Status —" }, ...PAY_STATUSES]} />
@@ -196,6 +205,7 @@ function FileViewModal({ file, onClose }) {
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Client Name</span><div style={{ fontWeight: 600 }}>{file.clientName}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{file.caseReference}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Box Reference</span><div style={{ fontWeight: 600 }}>{file.boxReference}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span><div style={{ fontWeight: 600 }}>{file.requestedByName || "—"}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Remarks</span><div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, minHeight: 40, fontSize: 14 }}>{file.remarks || "No remarks"}</div></div>
         {file.logs && file.logs.length > 0 && (
           <div>
@@ -325,15 +335,24 @@ export default function App() {
   };
 
   const addFile = async ({ clientName, caseRef, boxRef }) => {
+    const matchingRequest = requests.find(r => normalizeRef(r.caseReference) === normalizeRef(caseRef));
     const { data, error } = await supabase.from("files").insert({
       client_name: clientName, case_reference: caseRef, box_reference: boxRef,
       remarks: "",
       logs: [{ time: ts(), action: "File added to system", by: profile.name }],
       created_by: profile.name,
+      ...(matchingRequest ? { requested_by: matchingRequest.requestedBy, requested_by_name: matchingRequest.requestedByName } : {}),
     }).select().single();
     if (error) throw new Error(error.message);
     await fetchFiles();
     return mapFile(data);
+  };
+
+  const clearFileRequester = async (fileId) => {
+    const { error } = await supabase.from("files").update({ requested_by: null, requested_by_name: null }).eq("id", fileId);
+    if (error) return showToast(error.message);
+    await fetchFiles();
+    showToast("Requested By cleared");
   };
 
   const deleteFile = async (file) => {
@@ -377,7 +396,11 @@ export default function App() {
       status: "Pending", requested_by: profile.id, requested_by_name: profile.name,
     });
     if (error) throw new Error(error.message);
-    await fetchRequests();
+    const matchingFile = findFileByCaseRef(caseRef, files);
+    if (matchingFile) {
+      await supabase.from("files").update({ requested_by: profile.id, requested_by_name: profile.name }).eq("id", matchingFile.id);
+    }
+    await Promise.all([fetchRequests(), fetchFiles()]);
   };
 
   if (booting) return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "Inter, system-ui, sans-serif", color: "#64748b" }}>Loading...</div>;
@@ -405,7 +428,7 @@ export default function App() {
     </div>
   );
 
-  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} updateFileField={updateFileField} addRemark={addRemark} deleteFile={deleteFile} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} updateFileField={updateFileField} addRemark={addRemark} deleteFile={deleteFile} clearFileRequester={clearFileRequester} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (profile.role === "pic") return shell(<PICPanel profile={profile} files={files} requests={requests} submitRequest={submitRequest} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (profile.role === "op") return shell(<OPPanel profile={profile} files={files} requests={requests} addFile={addFile} updateFileField={updateFileField} addRemark={addRemark} showToast={showToast} changeMyPassword={changeMyPassword} />);
 }
@@ -504,7 +527,7 @@ function ChangePasswordModal({ onClose, showToast, changeMyPassword }) {
 }
 
 /* ── ADMIN PANEL ──────────────────────────────────────── */
-function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, updateFileField, addRemark, deleteFile, showToast, changeMyPassword }) {
+function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, updateFileField, addRemark, deleteFile, clearFileRequester, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("members");
   const [showAdd, setShowAdd] = useState(false);
   const [showPw, setShowPw] = useState(false);
@@ -632,7 +655,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
       )}
 
       {viewFile && (
-        <FileEditModal file={viewFile} remark={remark} setRemark={setRemark} onClose={() => setViewFileId(null)} updateFileField={updateFileField} addRemark={addRemark} onDelete={handleDelete} />
+        <FileEditModal file={viewFile} remark={remark} setRemark={setRemark} onClose={() => setViewFileId(null)} updateFileField={updateFileField} addRemark={addRemark} onDelete={handleDelete} onClearRequester={clearFileRequester} />
       )}
 
       {showAdd && (
