@@ -193,6 +193,50 @@ function FileTable({ files, requests, onView, onDelete, onRequest }) {
   );
 }
 
+function RequestTable({ requests, files, showRequester, statusFor, onView, renderActions }) {
+  return (
+    <Card style={{ padding: 0, overflow: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
+            <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>CLIENT / CASE</th>
+            {showRequester && <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>REQUESTED BY</th>}
+            <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>STATUS</th>
+            <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>PAYMENT STATUS</th>
+            <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>ACTIONS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {requests.map(r => {
+            const file = findFileByCaseRef(r.caseReference, files);
+            const status = statusFor ? statusFor(r, file) : requestDisplayStatus(r, files);
+            const payment = (file && file.paymentStatus) || "No Status";
+            return (
+              <tr key={r.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                <td style={{ padding: "12px" }}>
+                  <div style={{ fontWeight: 600, color: "#1e293b" }}>{r.clientName}</div>
+                  <div style={{ fontSize: 13, color: "#64748b" }}>Case: {r.caseReference}</div>
+                  <div style={{ fontSize: 12, color: "#94a3b8" }}>{r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
+                </td>
+                {showRequester && <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{r.requestedByName}</td>}
+                <td style={{ padding: "12px" }}><Badge text={status} color={STATUS_COLORS[status] || "#94a3b8"} /></td>
+                <td style={{ padding: "12px" }}><Badge text={payment} color={STATUS_COLORS[payment] || "#94a3b8"} /></td>
+                <td style={{ padding: "12px" }}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <Btn variant="secondary" onClick={() => onView(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
+                    {renderActions && renderActions(r, file)}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+          {requests.length === 0 && <tr><td colSpan={showRequester ? 5 : 4} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>No requests found</td></tr>}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
 function FileEditModal({ file, remark, setRemark, onClose, updateFileField, addRemark, onDelete, editableCore }) {
   return (
     <Modal title="File Details — Edit" onClose={onClose}>
@@ -845,46 +889,23 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancel
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>My File Requests</h3>
-            {activeRequests.length === 0 ? <Card><p style={{ color: "#94a3b8", textAlign: "center" }}>No requests yet</p></Card> : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {sortRequestsByStatus(activeRequests, files).map(r => (
-                  <Card key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                    <div>
-                      <div style={{ fontWeight: 600, color: "#1e293b" }}>{r.clientName}</div>
-                      <div style={{ fontSize: 13, color: "#64748b" }}>Case: {r.caseReference}</div>
-                      <div style={{ fontSize: 12, color: "#94a3b8" }}>{r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <Badge text={requestDisplayStatus(r, files)} color={STATUS_COLORS[requestDisplayStatus(r, files)] || "#94a3b8"} />
-                      <Btn variant="secondary" onClick={() => viewRequestFile(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
-                      <Btn variant="danger" onClick={() => handleCancel(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Cancel</Btn>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            )}
+            <RequestTable
+              requests={sortRequestsByStatus(activeRequests, files)}
+              files={files}
+              onView={viewRequestFile}
+              renderActions={r => <Btn variant="danger" onClick={() => handleCancel(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Cancel</Btn>}
+            />
           </div>
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Delivered</h3>
-            {deliveredRequests.length === 0 ? <Card><p style={{ color: "#94a3b8", textAlign: "center" }}>No delivered requests yet</p></Card> : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {deliveredRequests.map(r => (
-                  <Card key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                    <div>
-                      <div style={{ fontWeight: 600, color: "#1e293b" }}>{r.clientName}</div>
-                      <div style={{ fontSize: 13, color: "#64748b" }}>Case: {r.caseReference}</div>
-                      <div style={{ fontSize: 12, color: "#94a3b8" }}>{r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <Badge text="Delivered" color={STATUS_COLORS.Delivered} />
-                      <Btn variant="secondary" onClick={() => viewRequestFile(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
-                      <Btn variant="danger" onClick={() => handleRemove(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Remove</Btn>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            )}
+            <RequestTable
+              requests={deliveredRequests}
+              files={files}
+              statusFor={() => "Delivered"}
+              onView={viewRequestFile}
+              renderActions={r => <Btn variant="danger" onClick={() => handleRemove(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Remove</Btn>}
+            />
           </div>
         </div>
       )}
@@ -974,53 +995,24 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
-            {activeRequests.length === 0 ? <Card><p style={{ color: "#94a3b8", textAlign: "center" }}>No requests yet</p></Card> : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {sortRequestsByStatus(activeRequests, files).map(r => (
-                  <Card key={r.id}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", flexWrap: "wrap", gap: 12 }}>
-                      <div>
-                        <div style={{ fontWeight: 600, color: "#1e293b" }}>{r.clientName}</div>
-                        <div style={{ fontSize: 13, color: "#64748b" }}>Case: {r.caseReference}</div>
-                        <div style={{ fontSize: 12, color: "#94a3b8" }}>Requested by {r.requestedByName} · {r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <Badge text={requestDisplayStatus(r, files)} color={STATUS_COLORS[requestDisplayStatus(r, files)] || "#94a3b8"} />
-                        <Btn variant="secondary" onClick={() => viewRequestFile(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            )}
+            <RequestTable
+              requests={sortRequestsByStatus(activeRequests, files)}
+              files={files}
+              showRequester
+              onView={viewRequestFile}
+            />
           </div>
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Delivered</h3>
-            {deliveredRequests.length === 0 ? <Card><p style={{ color: "#94a3b8", textAlign: "center" }}>No delivered requests yet</p></Card> : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {deliveredRequests.map(r => {
-                  const linkedFile = findFileByCaseRef(r.caseReference, files);
-                  return (
-                    <Card key={r.id}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", flexWrap: "wrap", gap: 12 }}>
-                        <div>
-                          <div style={{ fontWeight: 600, color: "#1e293b" }}>{r.clientName}</div>
-                          <div style={{ fontSize: 13, color: "#64748b" }}>Case: {r.caseReference}</div>
-                          <div style={{ fontSize: 12, color: "#94a3b8" }}>Requested by {r.requestedByName} · {r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <Badge text={(linkedFile && linkedFile.status) || "No Status"} color={STATUS_COLORS[linkedFile && linkedFile.status] || "#94a3b8"} />
-                          <Badge text={(linkedFile && linkedFile.paymentStatus) || "No Status"} color={STATUS_COLORS[linkedFile && linkedFile.paymentStatus] || "#94a3b8"} />
-                          <Btn variant="secondary" onClick={() => viewRequestFile(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
-                          {linkedFile && <Btn variant="danger" onClick={() => handleReturn(linkedFile)} style={{ padding: "4px 10px", fontSize: 12 }}>Return</Btn>}
-                        </div>
-                      </div>
-                    </Card>
-                  );
-                })}
-              </div>
-            )}
+            <RequestTable
+              requests={deliveredRequests}
+              files={files}
+              showRequester
+              statusFor={(r, file) => (file && file.status) || "No Status"}
+              onView={viewRequestFile}
+              renderActions={(r, file) => file && <Btn variant="danger" onClick={() => handleReturn(file)} style={{ padding: "4px 10px", fontSize: 12 }}>Return</Btn>}
+            />
           </div>
         </div>
       )}
