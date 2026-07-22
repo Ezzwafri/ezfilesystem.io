@@ -43,6 +43,29 @@ function requestDisplayStatus(request, files) {
   const file = findFileByCaseRef(request.caseReference, files);
   return (file && file.status) || "Request";
 }
+function splitLogs(logs) {
+  const all = logs || [];
+  return {
+    history: all.filter(l => !l.action.startsWith("Remark added")),
+    remarks: all.filter(l => l.action.startsWith("Remark added")),
+  };
+}
+
+const LogColumn = ({ title, entries }) => (
+  <div>
+    <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>{title}</span>
+    <div style={{ background: "#f8fafc", borderRadius: 6, padding: 10, height: 200, overflow: "auto", marginTop: 4 }}>
+      {entries.length === 0
+        ? <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>No entries yet</p>
+        : entries.slice().reverse().map((l, i) => (
+          <div key={i} style={{ fontSize: 13, padding: "6px 0", borderBottom: i < entries.length - 1 ? "1px solid #e2e8f0" : "none" }}>
+            <div style={{ color: "#94a3b8", fontSize: 11 }}>{l.time} — <span style={{ color: "#64748b" }}>{l.by}</span></div>
+            <div style={{ color: "#334155" }}>{l.action}</div>
+          </div>
+        ))}
+    </div>
+  </div>
+);
 
 const Badge = ({ text, color }) => (
   <span style={{ background: color || "#94a3b8", color: "#fff", padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{text}</span>
@@ -190,19 +213,10 @@ function FileEditModal({ file, remark, setRemark, onClose, updateFileField, addR
           <Btn variant="secondary" onClick={() => addRemark(file, remark)} style={{ marginTop: 6 }}>Save Remark</Btn>
         </div>
         {onDelete && <Btn variant="danger" onClick={() => onDelete(file)}>Delete File</Btn>}
-        {file.logs && file.logs.length > 0 && (
-          <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>Log History</span>
-            <div style={{ background: "#f8fafc", borderRadius: 6, padding: 10, maxHeight: 200, overflow: "auto", marginTop: 4 }}>
-              {file.logs.slice().reverse().map((l, i) => (
-                <div key={i} style={{ fontSize: 13, padding: "6px 0", borderBottom: i < file.logs.length - 1 ? "1px solid #e2e8f0" : "none" }}>
-                  <div style={{ color: "#94a3b8", fontSize: 11 }}>{l.time} — <span style={{ color: "#64748b" }}>{l.by}</span></div>
-                  <div style={{ color: "#334155" }}>{l.action}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <LogColumn title="Log History" entries={splitLogs(file.logs).history} />
+          <LogColumn title="Log Remarks" entries={splitLogs(file.logs).remarks} />
+        </div>
       </div>
     </Modal>
   );
@@ -231,19 +245,10 @@ function FileViewModal({ file, onClose }) {
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{file.caseReference}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Box Reference</span><div style={{ fontWeight: 600 }}>{file.boxReference}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Remarks</span><div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, minHeight: 40, fontSize: 14 }}>{file.remarks || "No remarks"}</div></div>
-        {file.logs && file.logs.length > 0 && (
-          <div>
-            <span style={{ fontSize: 12, color: "#64748b" }}>Log History</span>
-            <div style={{ background: "#f8fafc", borderRadius: 6, padding: 10, maxHeight: 160, overflow: "auto" }}>
-              {file.logs.map((l, i) => (
-                <div key={i} style={{ fontSize: 13, padding: "4px 0", borderBottom: i < file.logs.length - 1 ? "1px solid #e2e8f0" : "none" }}>
-                  <span style={{ color: "#94a3b8", fontSize: 11 }}>{l.time}</span> — <span style={{ color: "#475569" }}>{l.action}</span>
-                  <span style={{ color: "#94a3b8" }}> by {l.by}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <LogColumn title="Log History" entries={splitLogs(file.logs).history} />
+          <LogColumn title="Log Remarks" entries={splitLogs(file.logs).remarks} />
+        </div>
       </div>
     </Modal>
   );
