@@ -428,7 +428,11 @@ export default function App() {
     const log = { time: ts(), action: "File returned — status reset", by: profile.name };
     const { error } = await supabase.from("files").update({ status: null, payment_status: null, logs: [...(file.logs || []), log] }).eq("id", file.id);
     if (error) return showToast(error.message);
-    await fetchFiles();
+    const deliveredRequests = requests.filter(r => r.status === "Delivered" && normalizeRef(r.caseReference) === normalizeRef(file.caseReference));
+    if (deliveredRequests.length > 0) {
+      await supabase.from("requests").update({ status: "Pending" }).in("id", deliveredRequests.map(r => r.id));
+    }
+    await Promise.all([fetchFiles(), fetchRequests()]);
     showToast("File returned");
   };
 
