@@ -148,9 +148,9 @@ create policy "op and admin can update requests"
   on public.requests for update
   using (public.current_role() in ('op', 'admin'));
 
-create policy "admins can delete requests"
+create policy "op and admin can delete requests"
   on public.requests for delete
-  using (public.current_role() = 'admin');
+  using (public.current_role() in ('op', 'admin'));
 
 create policy "pic can remove own requests"
   on public.requests for delete
