@@ -2,12 +2,31 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase, createDetachedClient } from "./supabaseClient";
 
 const FILE_STATUSES = ["Searching", "Found", "Pending Delivery", "Delivered"];
-const PAY_STATUSES = ["Pending", "Billing", "Billed", "Pending Payment", "Paid"];
+const CLIENT_USE_PAY_STATUSES = [
+  "Pending Invoice DLegal", "Pending Payment to DLegal",
+  "Received Payment from Client", "Pending Invoice to Ezzreca", "Paid to Ezzreca",
+];
+const OFFICE_USE_PAY_STATUSES = [
+  "Pending Invoice Ezzreca", "Pending Payment to Ezzreca", "Paid to Ezzreca",
+];
+const ALL_PAY_STATUSES = [...new Set([...CLIENT_USE_PAY_STATUSES, ...OFFICE_USE_PAY_STATUSES])];
+const PIC_LIKE_ROLES = ["lawyer", "partner"];
+
 const STATUS_COLORS = {
-  Pending: "#f59e0b", Searching: "#3b82f6", Found: "#10b981",
-  "Pending Delivery": "#f97316", Delivered: "#059669",
-  Billing: "#8b5cf6", Billed: "#6366f1", "Pending Payment": "#f97316", Paid: "#10b981",
+  Pending: "#f59e0b", Billing: "#8b5cf6", Billed: "#6366f1",
+  "Pending Payment": "#f97316", Paid: "#10b981",
+  Searching: "#3b82f6", Found: "#10b981",
+  "Pending Delivery": "#f97316", Delivered: "#059669", Return: "#a855f7",
   Request: "#ec4899",
+  "Pending Invoice DLegal": "#f59e0b", "Pending Payment to DLegal": "#f97316",
+  "Received Payment from Client": "#10b981", "Pending Invoice to Ezzreca": "#8b5cf6",
+  "Paid to Ezzreca": "#059669",
+  "Pending Invoice Ezzreca": "#f59e0b", "Pending Payment to Ezzreca": "#f97316",
+};
+
+const ROLE_COLORS = {
+  admin: "#c9a227", op: "#059669",
+  lawyer: "#8b5cf6", partner: "#d946ef",
 };
 
 function genPassword() {
@@ -21,27 +40,28 @@ function mapFile(row) {
     id: row.id, clientName: row.client_name, caseReference: row.case_reference,
     boxReference: row.box_reference, status: row.status, paymentStatus: row.payment_status,
     remarks: row.remarks, logs: row.logs || [], requestedBy: row.requested_by,
-    requestedByName: row.requested_by_name, createdAt: row.created_at, createdBy: row.created_by,
+    requestedByName: row.requested_by_name, useType: row.use_type,
+    endorsedByName: row.endorsed_by_name, createdAt: row.created_at, createdBy: row.created_by,
   };
 }
 function mapRequest(row) {
   return {
     id: row.id, caseReference: row.case_reference, clientName: row.client_name,
     useType: row.use_type, status: row.status, requestedBy: row.requested_by,
-    requestedByName: row.requested_by_name, requestedAt: row.requested_at,
+    requestedByName: row.requested_by_name, endorsedByName: row.endorsed_by_name,
+    requestedAt: row.requested_at,
   };
 }
 
 function normalizeRef(s) { return (s || "").trim().toLowerCase(); }
-function activeRequestFor(file, requests) {
-  return requests.find(r => r.status !== "Delivered" && normalizeRef(r.caseReference) === normalizeRef(file.caseReference)) || null;
-}
 function findFileByCaseRef(caseRef, files) {
   return files.find(f => normalizeRef(f.caseReference) === normalizeRef(caseRef)) || null;
 }
-function requestDisplayStatus(request, files) {
-  const file = findFileByCaseRef(request.caseReference, files);
-  return (file && file.status) || "Request";
+function anyRequestFor(file, requests) {
+  return requests.find(r => normalizeRef(r.caseReference) === normalizeRef(file.caseReference)) || null;
+}
+function isFileLocked(file, requests) {
+  return !!file.requestedBy || !!anyRequestFor(file, requests);
 }
 function extractYear(caseRef) {
   const match = (caseRef || "").match(/(19|20)\d{2}/);
@@ -50,9 +70,10 @@ function extractYear(caseRef) {
 function sortFilesByYear(files) {
   return files.slice().sort((a, b) => extractYear(b.caseReference) - extractYear(a.caseReference));
 }
-const REQUEST_STATUS_ORDER = ["Request", "Searching", "Found", "Pending Delivery"];
-function sortRequestsByStatus(reqs, files) {
-  return reqs.slice().sort((a, b) => REQUEST_STATUS_ORDER.indexOf(requestDisplayStatus(a, files)) - REQUEST_STATUS_ORDER.indexOf(requestDisplayStatus(b, files)));
+function getPayStatusOptions(useType) {
+  if (useType === "Client Use") return CLIENT_USE_PAY_STATUSES;
+  if (useType === "Office Use") return OFFICE_USE_PAY_STATUSES;
+  return ALL_PAY_STATUSES;
 }
 function splitLogs(logs) {
   const all = logs || [];
@@ -131,7 +152,7 @@ const Modal = ({ title, onClose, children }) => (
 );
 
 const Tabs = ({ tabs, active, onChange }) => (
-  <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e2e8f0", marginBottom: 20 }}>
+  <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e2e8f0", marginBottom: 20, flexWrap: "wrap" }}>
     {tabs.map(t => (
       <button key={t.id} onClick={() => onChange(t.id)} style={{
         padding: "10px 20px", border: "none", borderBottom: active === t.id ? "2px solid #1e3a5f" : "2px solid transparent",
@@ -160,8 +181,8 @@ function FileTable({ files, requests, onView, onDelete, onRequest }) {
         </thead>
         <tbody>
           {files.map(f => {
-            const activeReq = activeRequestFor(f, requests);
-            const displayStatus = f.status || (activeReq ? "Request" : null);
+            const locked = isFileLocked(f, requests);
+            const displayStatus = f.status || (locked ? "Request" : null);
             return (
               <tr key={f.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
                 <td style={{ padding: "12px" }}>
@@ -169,15 +190,15 @@ function FileTable({ files, requests, onView, onDelete, onRequest }) {
                   <div style={{ fontSize: 13, color: "#64748b" }}>Case: {f.caseReference}</div>
                 </td>
                 <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{f.boxReference}</td>
-                <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{activeReq ? activeReq.requestedByName : ""}</td>
+                <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{f.requestedByName || ""}</td>
                 <td style={{ padding: "12px" }}><Badge text={displayStatus || "No Status"} color={STATUS_COLORS[displayStatus] || "#94a3b8"} /></td>
                 <td style={{ padding: "12px" }}><Badge text={f.paymentStatus || "No Status"} color={STATUS_COLORS[f.paymentStatus] || "#94a3b8"} /></td>
                 <td style={{ padding: "12px" }}>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <Btn variant="secondary" onClick={() => onView(f)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
                     {onRequest && (
-                      <Btn variant={activeReq ? "secondary" : "primary"} disabled={!!activeReq} onClick={() => onRequest(f)} style={{ padding: "4px 10px", fontSize: 12 }}>
-                        {activeReq ? "Requested" : "Request"}
+                      <Btn variant={locked ? "secondary" : "primary"} disabled={locked} onClick={() => onRequest(f)} style={{ padding: "4px 10px", fontSize: 12 }}>
+                        {locked ? "Requested" : "Request"}
                       </Btn>
                     )}
                     {onDelete && <Btn variant="danger" onClick={() => onDelete(f)} style={{ padding: "4px 10px", fontSize: 12 }}>Delete</Btn>}
@@ -201,6 +222,7 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
           <tr style={{ borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
             <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>CLIENT / CASE</th>
             {showRequester && <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>REQUESTED BY</th>}
+            <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>USE TYPE</th>
             <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>STATUS</th>
             <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>PAYMENT STATUS</th>
             <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>ACTIONS</th>
@@ -209,7 +231,7 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
         <tbody>
           {requests.map(r => {
             const file = findFileByCaseRef(r.caseReference, files);
-            const status = statusFor ? statusFor(r, file) : requestDisplayStatus(r, files);
+            const status = statusFor ? statusFor(r, file) : ((file && file.status) || "Request");
             const payment = (file && file.paymentStatus) || "No Status";
             return (
               <tr key={r.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
@@ -218,7 +240,13 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
                   <div style={{ fontSize: 13, color: "#64748b" }}>Case: {r.caseReference}</div>
                   <div style={{ fontSize: 12, color: "#94a3b8" }}>{r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div>
                 </td>
-                {showRequester && <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{r.requestedByName}</td>}
+                {showRequester && (
+                  <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>
+                    {r.requestedByName}
+                    {r.endorsedByName ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Endorsed by: {r.endorsedByName}</div> : null}
+                  </td>
+                )}
+                <td style={{ padding: "12px" }}><Badge text={r.useType || "—"} color={r.useType === "Client Use" ? "#6366f1" : "#059669"} /></td>
                 <td style={{ padding: "12px" }}><Badge text={status} color={STATUS_COLORS[status] || "#94a3b8"} /></td>
                 <td style={{ padding: "12px" }}><Badge text={payment} color={STATUS_COLORS[payment] || "#94a3b8"} /></td>
                 <td style={{ padding: "12px" }}>
@@ -230,47 +258,112 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
               </tr>
             );
           })}
-          {requests.length === 0 && <tr><td colSpan={showRequester ? 5 : 4} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>No requests found</td></tr>}
+          {requests.length === 0 && <tr><td colSpan={showRequester ? 6 : 5} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>No requests found</td></tr>}
         </tbody>
       </table>
     </Card>
   );
 }
 
-function FileEditModal({ file, remark, setRemark, onClose, updateFileField, addRemark, onDelete, editableCore }) {
+function FileEditModal({ file, requests, onClose, updateFileFields, addRemark, onDelete }) {
+  const [edits, setEdits] = useState({
+    clientName: file.clientName,
+    caseReference: file.caseReference,
+    boxReference: file.boxReference,
+    status: file.status || "",
+    paymentStatus: file.paymentStatus || "",
+  });
+  const [remarkText, setRemarkText] = useState("");
+  const [dirty, setDirty] = useState(false);
+
+  const payOptions = getPayStatusOptions(file.useType);
+  const { history, remarks: remarkLogs } = splitLogs(file.logs);
+
+  const set = (field, value) => {
+    setEdits(prev => ({ ...prev, [field]: value }));
+    setDirty(true);
+  };
+
+  const handleSave = () => {
+    const changes = {};
+    if (edits.clientName !== file.clientName) changes.clientName = edits.clientName;
+    if (edits.caseReference !== file.caseReference) changes.caseReference = edits.caseReference;
+    if (edits.boxReference !== file.boxReference) changes.boxReference = edits.boxReference;
+    if (edits.status !== (file.status || "")) changes.status = edits.status;
+    if (edits.paymentStatus !== (file.paymentStatus || "")) changes.paymentStatus = edits.paymentStatus;
+    if (Object.keys(changes).length > 0) {
+      updateFileFields(file, changes);
+      setDirty(false);
+    }
+  };
+
+  const handleAddRemark = () => {
+    if (!remarkText.trim()) return;
+    addRemark(file, remarkText.trim());
+    setRemarkText("");
+  };
+
   return (
     <Modal title="File Details — Edit" onClose={onClose}>
       <div style={{ display: "grid", gap: 14 }}>
-        {editableCore ? (
-          <>
-            <Input label="Client Name" defaultValue={file.clientName} onBlur={e => e.target.value !== file.clientName && updateFileField(file, "clientName", e.target.value)} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Input label="Case Reference" defaultValue={file.caseReference} onBlur={e => e.target.value !== file.caseReference && updateFileField(file, "caseReference", e.target.value)} />
-              <Input label="Box Reference" defaultValue={file.boxReference} onBlur={e => e.target.value !== file.boxReference && updateFileField(file, "boxReference", e.target.value)} />
-            </div>
-          </>
-        ) : (
-          <>
-            <div><span style={{ fontSize: 12, color: "#64748b" }}>Client Name</span><div style={{ fontWeight: 600, fontSize: 16 }}>{file.clientName}</div></div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 500 }}>{file.caseReference}</div></div>
-              <div><span style={{ fontSize: 12, color: "#64748b" }}>Box Reference</span><div style={{ fontWeight: 500 }}>{file.boxReference}</div></div>
-            </div>
-          </>
+        <Input label="Client Name" value={edits.clientName} onChange={e => set("clientName", e.target.value)} />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Input label="Case Reference" value={edits.caseReference} onChange={e => set("caseReference", e.target.value)} />
+          <Input label="Box Reference" value={edits.boxReference} onChange={e => set("boxReference", e.target.value)} />
+        </div>
+        {file.useType && (
+          <div><span style={{ fontSize: 12, color: "#64748b" }}>Use Type</span><div style={{ fontWeight: 500, marginTop: 2 }}><Badge text={file.useType} color={file.useType === "Client Use" ? "#6366f1" : "#059669"} /></div></div>
+        )}
+        {file.requestedByName && (
+          <div>
+            <span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span>
+            <div style={{ fontWeight: 500 }}>{file.requestedByName}{file.endorsedByName ? ` (Endorsed by: ${file.endorsedByName})` : ""}</div>
+          </div>
         )}
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Date Added</span><div>{file.createdAt ? new Date(file.createdAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : "—"}</div></div>
-        <Select label="File Status" value={file.status || ""} onChange={e => updateFileField(file, "status", e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...FILE_STATUSES]} />
-        <Select label="Payment Status" value={file.paymentStatus || ""} onChange={e => updateFileField(file, "paymentStatus", e.target.value)} options={[{ value: "", label: "— Select Payment Status —" }, ...PAY_STATUSES]} />
+        <Select label="File Status" value={edits.status} onChange={e => set("status", e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...FILE_STATUSES]} />
+        <Select label="Payment Status" value={edits.paymentStatus} onChange={e => set("paymentStatus", e.target.value)} options={[{ value: "", label: "— Select Payment Status —" }, ...payOptions]} />
         <div>
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>Remarks</label>
-          <textarea value={remark} onChange={e => setRemark(e.target.value)} rows={3}
+          <textarea value={remarkText} onChange={e => setRemarkText(e.target.value)} rows={3} placeholder={file.remarks || "No remarks"}
             style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
-          <Btn variant="secondary" onClick={() => addRemark(file, remark)} style={{ marginTop: 6 }}>Save Remark</Btn>
+          <Btn variant="secondary" onClick={handleAddRemark} style={{ marginTop: 6 }}>Save Remark</Btn>
         </div>
         {onDelete && <Btn variant="danger" onClick={() => onDelete(file)}>Delete File</Btn>}
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <LogColumn title="Log History" entries={splitLogs(file.logs).history} />
-          <LogColumn title="Log Remarks" entries={splitLogs(file.logs).remarks} />
+          <LogColumn title="Log History" entries={history} />
+          <LogColumn title="Log Remarks" entries={remarkLogs} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <Btn variant="primary" onClick={handleSave} disabled={!dirty} style={{ padding: "10px 28px" }}>Save Edit</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function FileViewModal({ file, onClose }) {
+  const { history, remarks: remarkLogs } = splitLogs(file.logs);
+  return (
+    <Modal title="File Details" onClose={onClose}>
+      <div style={{ display: "grid", gap: 12 }}>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Client Name</span><div style={{ fontWeight: 600 }}>{file.clientName}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{file.caseReference}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Box Reference</span><div style={{ fontWeight: 600 }}>{file.boxReference}</div></div>
+        {file.useType && (
+          <div><span style={{ fontSize: 12, color: "#64748b" }}>Use Type</span><div style={{ marginTop: 2 }}><Badge text={file.useType} color={file.useType === "Client Use" ? "#6366f1" : "#059669"} /></div></div>
+        )}
+        {file.requestedByName && (
+          <div>
+            <span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span>
+            <div style={{ fontWeight: 500 }}>{file.requestedByName}{file.endorsedByName ? ` (Endorsed by: ${file.endorsedByName})` : ""}</div>
+          </div>
+        )}
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Date Added</span><div>{file.createdAt ? new Date(file.createdAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : "—"}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Remarks</span><div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, minHeight: 40, fontSize: 14 }}>{file.remarks || "No remarks"}</div></div>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <LogColumn title="Log History" entries={history} />
+          <LogColumn title="Log Remarks" entries={remarkLogs} />
         </div>
       </div>
     </Modal>
@@ -284,7 +377,7 @@ function RequestDetailModal({ request, onClose }) {
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Client Name</span><div style={{ fontWeight: 600 }}>{request.clientName}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{request.caseReference}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Use Type</span><div style={{ fontWeight: 600 }}>{request.useType}</div></div>
-        <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span><div style={{ fontWeight: 600 }}>{request.requestedByName || "—"}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span><div style={{ fontWeight: 600 }}>{request.requestedByName || "—"}{request.endorsedByName ? ` (Endorsed by: ${request.endorsedByName})` : ""}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested At</span><div>{request.requestedAt ? new Date(request.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div></div>
         <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>This case hasn't been added to the file system yet.</p>
       </div>
@@ -292,17 +385,27 @@ function RequestDetailModal({ request, onClose }) {
   );
 }
 
-function FileViewModal({ file, onClose }) {
+function RequestFileModal({ file, profile, onSubmit, onClose }) {
+  const [useType, setUseType] = useState("Office Use");
+  const [endorsedBy, setEndorsedBy] = useState("");
+  const needsEndorsement = profile.role === "lawyer" || profile.role === "partner";
+
+  const handleSubmit = () => {
+    if (needsEndorsement && !endorsedBy.trim()) return;
+    onSubmit({ useType, endorsedBy: needsEndorsement ? endorsedBy.trim() : null });
+  };
+
   return (
-    <Modal title="File Details" onClose={onClose}>
+    <Modal title={file ? `Request: ${file.clientName}` : "Request File"} onClose={onClose}>
       <div style={{ display: "grid", gap: 12 }}>
-        <div><span style={{ fontSize: 12, color: "#64748b" }}>Client Name</span><div style={{ fontWeight: 600 }}>{file.clientName}</div></div>
-        <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{file.caseReference}</div></div>
-        <div><span style={{ fontSize: 12, color: "#64748b" }}>Box Reference</span><div style={{ fontWeight: 600 }}>{file.boxReference}</div></div>
-        <div><span style={{ fontSize: 12, color: "#64748b" }}>Remarks</span><div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, minHeight: 40, fontSize: 14 }}>{file.remarks || "No remarks"}</div></div>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <LogColumn title="Log History" entries={splitLogs(file.logs).history} />
-          <LogColumn title="Log Remarks" entries={splitLogs(file.logs).remarks} />
+        {file && <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{file.caseReference}</div></div>}
+        <Select label="Use Type" value={useType} onChange={e => setUseType(e.target.value)} options={["Office Use", "Client Use"]} />
+        {needsEndorsement && (
+          <Input label="Endorsed By" value={endorsedBy} onChange={e => setEndorsedBy(e.target.value)} placeholder="Name of endorsing partner" />
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={handleSubmit} disabled={needsEndorsement && !endorsedBy.trim()}>Submit Request</Btn>
         </div>
       </div>
     </Modal>
@@ -426,6 +529,17 @@ export default function App() {
       created_by: profile.name,
     }).select().single();
     if (error) throw new Error(error.message);
+    const pendingReq = requests.find(r => normalizeRef(r.caseReference) === normalizeRef(caseRef));
+    if (pendingReq) {
+      const linkLog = { time: ts(), action: `Linked to request — ${pendingReq.useType}${pendingReq.endorsedByName ? ` — Endorsed by: ${pendingReq.endorsedByName}` : ""}`, by: profile.name };
+      await supabase.from("files").update({
+        requested_by: pendingReq.requestedBy,
+        requested_by_name: pendingReq.requestedByName,
+        use_type: pendingReq.useType,
+        endorsed_by_name: pendingReq.endorsedByName || null,
+        logs: [...(data.logs || []), linkLog],
+      }).eq("id", data.id);
+    }
     await fetchFiles();
     return mapFile(data);
   };
@@ -443,19 +557,25 @@ export default function App() {
 
   const FIELD_TO_COLUMN = { paymentStatus: "payment_status", clientName: "client_name", caseReference: "case_reference", boxReference: "box_reference" };
 
-  const updateFileField = async (file, field, value) => {
-    const dbField = FIELD_TO_COLUMN[field] || field;
-    const log = { time: ts(), action: `${field} changed to "${value}"`, by: profile.name };
-    const { error } = await supabase.from("files").update({ [dbField]: value, logs: [...(file.logs || []), log] }).eq("id", file.id);
+  const updateFileFields = async (file, changes) => {
+    const dbUpdates = {};
+    const newLogs = [...(file.logs || [])];
+    for (const [field, value] of Object.entries(changes)) {
+      const dbField = FIELD_TO_COLUMN[field] || field;
+      dbUpdates[dbField] = value;
+      newLogs.push({ time: ts(), action: `${field} changed to "${value}"`, by: profile.name });
+    }
+    dbUpdates.logs = newLogs;
+    const { error } = await supabase.from("files").update(dbUpdates).eq("id", file.id);
     if (error) return showToast(error.message);
-    if (field === "status" && value === "Delivered") {
+    if (changes.status === "Delivered") {
       const openRequests = requests.filter(r => r.status !== "Delivered" && normalizeRef(r.caseReference) === normalizeRef(file.caseReference));
       if (openRequests.length > 0) {
         await supabase.from("requests").update({ status: "Delivered" }).in("id", openRequests.map(r => r.id));
       }
     }
     await Promise.all([fetchFiles(), fetchRequests()]);
-    showToast(`${field} updated`);
+    showToast("File updated");
   };
 
   const addRemark = async (file, remarkText) => {
@@ -467,21 +587,67 @@ export default function App() {
     showToast("Remark added");
   };
 
-  const requestFile = async (file) => {
-    const active = requests.find(r => r.status !== "Delivered" && normalizeRef(r.caseReference) === normalizeRef(file.caseReference));
-    if (active) throw new Error("This file has already been requested");
+  const requestFile = async (file, { useType, endorsedBy }) => {
+    if (isFileLocked(file, requests)) throw new Error("This file has already been requested");
     const { error } = await supabase.from("requests").insert({
-      case_reference: file.caseReference, client_name: file.clientName, use_type: "Office Use",
+      case_reference: file.caseReference, client_name: file.clientName, use_type: useType,
       status: "Pending", requested_by: profile.id, requested_by_name: profile.name,
+      endorsed_by_name: endorsedBy || null,
     });
     if (error) throw new Error(error.message);
-    await supabase.rpc("log_file_request", { p_case_reference: file.caseReference, p_time: ts(), p_by: profile.name });
+    await supabase.rpc("log_file_request", {
+      p_case_reference: file.caseReference, p_time: ts(), p_by: profile.name,
+      p_requested_by: profile.id, p_requested_by_name: profile.name,
+      p_use_type: useType, p_endorsed_by_name: endorsedBy || null,
+    });
     await Promise.all([fetchRequests(), fetchFiles()]);
   };
 
-  const returnFile = async (file) => {
-    const log = { time: ts(), action: 'status changed to "Return"', by: profile.name };
-    const { error } = await supabase.from("files").update({ status: null, payment_status: null, logs: [...(file.logs || []), log] }).eq("id", file.id);
+  const requestFileManual = async ({ clientName, caseRef, useType, endorsedBy }) => {
+    const existing = requests.find(r => normalizeRef(r.caseReference) === normalizeRef(caseRef));
+    if (existing) throw new Error("A request for this case reference already exists");
+    const { error } = await supabase.from("requests").insert({
+      case_reference: caseRef, client_name: clientName, use_type: useType,
+      status: "Pending", requested_by: profile.id, requested_by_name: profile.name,
+      endorsed_by_name: endorsedBy || null,
+    });
+    if (error) throw new Error(error.message);
+    const existingFile = findFileByCaseRef(caseRef, files);
+    if (existingFile) {
+      await supabase.rpc("log_file_request", {
+        p_case_reference: caseRef, p_time: ts(), p_by: profile.name,
+        p_requested_by: profile.id, p_requested_by_name: profile.name,
+        p_use_type: useType, p_endorsed_by_name: endorsedBy || null,
+      });
+    }
+    await Promise.all([fetchRequests(), fetchFiles()]);
+  };
+
+  const cancelRequest = async (request) => {
+    const { error } = await supabase.from("requests").delete().eq("id", request.id);
+    if (error) return showToast(error.message);
+    const file = findFileByCaseRef(request.caseReference, files);
+    if (file) {
+      await supabase.rpc("pic_cancel_request", { p_case_reference: request.caseReference, p_time: ts(), p_by: profile.name });
+    }
+    await Promise.all([fetchRequests(), fetchFiles()]);
+    showToast("Request cancelled");
+  };
+
+  const picRequestReturn = async (file) => {
+    await supabase.rpc("pic_request_return", { p_case_reference: file.caseReference, p_time: ts(), p_by: profile.name });
+    await Promise.all([fetchFiles(), fetchRequests()]);
+    showToast("Return requested");
+  };
+
+  const opCompleteReturn = async (file) => {
+    const log = { time: ts(), action: "File returned to file room", by: profile.name };
+    const { error } = await supabase.from("files").update({
+      status: null, payment_status: null,
+      requested_by: null, requested_by_name: null,
+      use_type: null, endorsed_by_name: null,
+      logs: [...(file.logs || []), log],
+    }).eq("id", file.id);
     if (error) return showToast(error.message);
     const linkedRequests = requests.filter(r => normalizeRef(r.caseReference) === normalizeRef(file.caseReference));
     if (linkedRequests.length > 0) {
@@ -491,28 +657,11 @@ export default function App() {
     showToast("File returned");
   };
 
-  const deleteRequest = async (requestId) => {
-    const { error } = await supabase.from("requests").delete().eq("id", requestId);
-    if (error) return showToast(error.message);
-    await fetchRequests();
-    showToast("Removed");
-  };
-
-  const cancelRequest = async (request, file) => {
-    const { error } = await supabase.from("requests").delete().eq("id", request.id);
-    if (error) return showToast(error.message);
-    if (file) {
-      await supabase.rpc("pic_return_file", { p_case_reference: file.caseReference, p_time: ts(), p_by: profile.name });
-    }
-    await Promise.all([fetchRequests(), fetchFiles()]);
-    showToast("Request cancelled");
-  };
-
   if (booting) return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "Inter, system-ui, sans-serif", color: "#64748b" }}>Loading...</div>;
-
   if (recoveryMode) return <ResetPasswordScreen onDone={() => setRecoveryMode(false)} showToast={showToast} toast={toast} />;
-
   if (!profile) return <LoginScreen showToast={showToast} toast={toast} />;
+
+  const isPicLike = PIC_LIKE_ROLES.includes(profile.role);
 
   const shell = (content) => (
     <div style={{ fontFamily: "'Inter', system-ui, sans-serif", minHeight: "100vh", background: "#f1f5f9" }}>
@@ -522,20 +671,18 @@ export default function App() {
           <span style={{ color: "#fff", fontWeight: 700, fontSize: 16, letterSpacing: 1 }}>EZRI FILE SYSTEM</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ color: "#cbd5e1", fontSize: 13 }}>{profile.name} <Badge text={profile.role.toUpperCase()} color={profile.role === "admin" ? "#c9a227" : profile.role === "pic" ? "#3b82f6" : "#059669"} /></span>
+          <span style={{ color: "#cbd5e1", fontSize: 13 }}>{profile.name} <Badge text={profile.role.toUpperCase()} color={ROLE_COLORS[profile.role] || "#94a3b8"} /></span>
           <Btn variant="ghost" onClick={logout} style={{ color: "#94a3b8", fontSize: 12 }}>Logout</Btn>
         </div>
       </header>
-      <main style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-        {content}
-      </main>
+      <main style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>{content}</main>
       {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#1e293b", color: "#fff", padding: "10px 24px", borderRadius: 8, fontSize: 14, zIndex: 1000, boxShadow: "0 4px 12px rgba(0,0,0,.2)" }}>{toast}</div>}
     </div>
   );
 
-  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} updateFileField={updateFileField} addRemark={addRemark} deleteFile={deleteFile} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "pic") return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} deleteRequest={deleteRequest} cancelRequest={cancelRequest} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "op") return shell(<OPPanel profile={profile} files={files} requests={requests} addFile={addFile} updateFileField={updateFileField} addRemark={addRemark} returnFile={returnFile} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} profile={profile} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (isPicLike) return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} requestFileManual={requestFileManual} cancelRequest={cancelRequest} picRequestReturn={picRequestReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "op") return shell(<OPPanel profile={profile} files={files} requests={requests} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
 }
 
 /* ── LOGIN ─────────────────────────────────────────────── */
@@ -572,7 +719,7 @@ function LoginScreen({ showToast, toast }) {
   );
 }
 
-/* ── RESET PASSWORD (recovery link landing) ────────────── */
+/* ── RESET PASSWORD ────────────────────────────────────── */
 function ResetPasswordScreen({ onDone, showToast, toast }) {
   const [np, setNp] = useState("");
   const [np2, setNp2] = useState("");
@@ -598,7 +745,7 @@ function ResetPasswordScreen({ onDone, showToast, toast }) {
   );
 }
 
-/* ── CHANGE PASSWORD MODAL ───────────────────────────── */
+/* ── CHANGE PASSWORD MODAL ─────────────────────────────── */
 function ChangePasswordModal({ onClose, showToast, changeMyPassword }) {
   const [cur, setCur] = useState("");
   const [np, setNp] = useState("");
@@ -631,24 +778,40 @@ function ChangePasswordModal({ onClose, showToast, changeMyPassword }) {
   );
 }
 
-/* ── ADMIN PANEL ──────────────────────────────────────── */
-function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, updateFileField, addRemark, deleteFile, showToast, changeMyPassword }) {
-  const [tab, setTab] = useState("members");
+/* ── ADMIN PANEL ───────────────────────────────────────── */
+function AdminPanel({ profiles, profile, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, updateFileFields, addRemark, deleteFile, opCompleteReturn, showToast, changeMyPassword }) {
+  const [tab, setTab] = useState("dashboard");
   const [showAdd, setShowAdd] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState("");
   const [resetSentFor, setResetSentFor] = useState(null);
-  const [form, setForm] = useState({ email: "", name: "", role: "pic" });
+  const [form, setForm] = useState({ email: "", name: "", role: "lawyer" });
   const [newMemberPw, setNewMemberPw] = useState(null);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
   const [viewFileId, setViewFileId] = useState(null);
-  const [remark, setRemark] = useState("");
+  const [viewRequestId, setViewRequestId] = useState(null);
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [addBusy, setAddBusy] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
+  const viewRequest = requests.find(r => r.id === viewRequestId) || null;
+
+  const incomingRequests = requests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    if (!file) return true;
+    return file.status !== "Delivered" && file.status !== "Return";
+  });
+  const deliveredRequests = requests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    return file && file.status === "Delivered";
+  });
+  const returnRequests = requests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    return file && file.status === "Return";
+  });
+
   const filteredFiles = files.filter(f => {
     const s = search.toLowerCase();
     return !s || f.clientName.toLowerCase().includes(s) || f.caseReference.toLowerCase().includes(s) || f.boxReference.toLowerCase().includes(s);
@@ -682,7 +845,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
     try {
       const password = await addMember({ email, name: form.name.trim(), role: form.role });
       setNewMemberPw({ email, password, name: form.name.trim() });
-      setForm({ email: "", name: "", role: "pic" });
+      setForm({ email: "", name: "", role: "lawyer" });
       setShowAdd(false);
       showToast("Member added");
     } catch (e) {
@@ -693,12 +856,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   };
 
   const handleReset = async (m) => {
-    try {
-      await resetMemberPassword(m.email);
-      setResetSentFor(m);
-    } catch (e) {
-      showToast(e.message);
-    }
+    try { await resetMemberPassword(m.email); setResetSentFor(m); } catch (e) { showToast(e.message); }
   };
 
   const saveName = (uid) => {
@@ -707,13 +865,65 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
     setEditId(null);
   };
 
+  const viewRequestFile = (r) => {
+    const f = findFileByCaseRef(r.caseReference, files);
+    if (!f) return setViewRequestId(r.id);
+    setViewFileId(f.id);
+  };
+
+  const handleReturn = (r) => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    if (!file) return;
+    if (!window.confirm(`Return "${file.clientName}" (Case: ${file.caseReference}) to file room?`)) return;
+    opCompleteReturn(file);
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div />
         <Btn variant="secondary" onClick={() => setShowPw(true)} style={{ fontSize: 12 }}>Change My Password</Btn>
       </div>
-      <Tabs tabs={[{ id: "members", label: "Members" }, { id: "addfile", label: "Add File" }, { id: "files", label: "File List" }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[
+        { id: "dashboard", label: "Dashboard", count: incomingRequests.length },
+        { id: "members", label: "Members" },
+        { id: "files", label: "File List" },
+      ]} active={tab} onChange={setTab} />
+
+      {tab === "dashboard" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          <Card style={{ maxWidth: 480 }}>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Add New File</h3>
+            <Input label="Client Name" value={addForm.clientName} onChange={e => setAddForm({ ...addForm, clientName: e.target.value })} placeholder="Client full name" />
+            <Input label="Case Reference" value={addForm.caseRef} onChange={e => setAddForm({ ...addForm, caseRef: e.target.value })} placeholder="eg. 2000/1234" />
+            <Input label="Box Reference" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
+            <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={addBusy}>Add File</Btn>
+          </Card>
+
+          <div>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
+            <RequestTable requests={incomingRequests} files={files} showRequester onView={viewRequestFile} />
+          </div>
+
+          <div>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Delivered</h3>
+            <RequestTable requests={deliveredRequests} files={files} showRequester statusFor={() => "Delivered"} onView={viewRequestFile} />
+          </div>
+
+          <div>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Return Requests</h3>
+            <RequestTable
+              requests={returnRequests} files={files} showRequester statusFor={() => "Return"} onView={viewRequestFile}
+              renderActions={(r, file) => {
+                if (file && file.status === "Return" && file.paymentStatus === "Paid to Ezzreca") {
+                  return <Btn variant="success" onClick={() => handleReturn(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Return</Btn>;
+                }
+                return null;
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {tab === "members" && (
         <div>
@@ -744,12 +954,8 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
                       ) : <span style={{ fontWeight: 500, color: "#1e293b" }}>{m.name}</span>}
                     </td>
                     <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{m.email}</td>
-                    <td style={{ padding: "12px" }}>
-                      <Badge text={m.role.toUpperCase()} color={m.role === "pic" ? "#3b82f6" : "#059669"} />
-                    </td>
-                    <td style={{ padding: "12px" }}>
-                      <Badge text={m.disabled ? "DEACTIVATED" : "ACTIVE"} color={m.disabled ? "#94a3b8" : "#10b981"} />
-                    </td>
+                    <td style={{ padding: "12px" }}><Badge text={m.role.toUpperCase()} color={ROLE_COLORS[m.role] || "#94a3b8"} /></td>
+                    <td style={{ padding: "12px" }}><Badge text={m.disabled ? "DEACTIVATED" : "ACTIVE"} color={m.disabled ? "#94a3b8" : "#10b981"} /></td>
                     <td style={{ padding: "12px" }}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <Btn variant="secondary" onClick={() => { setEditId(m.id); setEditName(m.name); }} style={{ padding: "4px 10px", fontSize: 12 }}>Edit Name</Btn>
@@ -768,33 +974,22 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
         </div>
       )}
 
-      {tab === "addfile" && (
-        <Card style={{ maxWidth: 480 }}>
-          <h3 style={{ color: "#1e293b", marginTop: 0 }}>Add New File</h3>
-          <Input label="Client Name" value={addForm.clientName} onChange={e => setAddForm({ ...addForm, clientName: e.target.value })} placeholder="Client full name" />
-          <Input label="Case Reference" value={addForm.caseRef} onChange={e => setAddForm({ ...addForm, caseRef: e.target.value })} placeholder="eg. 2000/1234" />
-          <Input label="Box Reference" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
-          <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={addBusy}>Add File</Btn>
-        </Card>
-      )}
-
       {tab === "files" && (
         <div>
           <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
-          <FileTable files={sortFilesByYear(filteredFiles)} requests={requests} onView={f => { setViewFileId(f.id); setRemark(f.remarks || ""); }} onDelete={handleDelete} />
+          <FileTable files={sortFilesByYear(filteredFiles)} requests={requests} onView={f => setViewFileId(f.id)} onDelete={handleDelete} />
         </div>
       )}
 
-      {viewFile && (
-        <FileEditModal file={viewFile} remark={remark} setRemark={setRemark} onClose={() => setViewFileId(null)} updateFileField={updateFileField} addRemark={addRemark} onDelete={handleDelete} editableCore />
-      )}
+      {viewFile && <FileEditModal file={viewFile} requests={requests} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} onDelete={handleDelete} />}
+      {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
 
       {showAdd && (
         <Modal title="Add New Member" onClose={() => setShowAdd(false)}>
           <Input label="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Full name" />
           <Input label="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="name@ezri.my" />
           <Select label="Role" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}
-            options={[{ value: "pic", label: "PIC" }, { value: "op", label: "Operations Manager" }]} />
+            options={[{ value: "lawyer", label: "Lawyer" }, { value: "partner", label: "Partner" }, { value: "op", label: "Operations Manager" }]} />
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <Btn variant="secondary" onClick={() => setShowAdd(false)} disabled={busy}>Cancel</Btn>
             <Btn onClick={handleAddMember} disabled={busy}>Add Member</Btn>
@@ -830,19 +1025,37 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   );
 }
 
-/* ── PIC PANEL ────────────────────────────────────────── */
-function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancelRequest, showToast, changeMyPassword }) {
+/* ── LAWYER / PARTNER PANEL ─────────────────────────────── */
+function PICPanel({ profile, files, requests, requestFile, requestFileManual, cancelRequest, picRequestReturn, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
   const [viewFileId, setViewFileId] = useState(null);
   const [viewRequestId, setViewRequestId] = useState(null);
+  const [requestingFile, setRequestingFile] = useState(null);
+  const [showManualRequest, setShowManualRequest] = useState(false);
+  const [manualForm, setManualForm] = useState({ clientName: "", caseRef: "", useType: "Office Use", endorsedBy: "" });
+  const [manualBusy, setManualBusy] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewRequest = requests.find(r => r.id === viewRequestId) || null;
   const myRequests = requests.filter(r => r.requestedBy === profile.id);
-  const activeRequests = myRequests.filter(r => r.status !== "Delivered");
-  const deliveredRequests = myRequests.filter(r => r.status === "Delivered");
+
+  const activeRequests = myRequests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    if (!file) return true;
+    return file.status !== "Delivered" && file.status !== "Return";
+  });
+  const deliveredRequests = myRequests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    return file && file.status === "Delivered";
+  });
+  const returnRequests = myRequests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    return file && file.status === "Return";
+  });
+
+  const needsEndorsement = profile.role === "lawyer" || profile.role === "partner";
 
   const viewRequestFile = (r) => {
     const f = findFileByCaseRef(r.caseReference, files);
@@ -850,23 +1063,47 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancel
     setViewFileId(f.id);
   };
 
-  const handleRequest = async (f) => {
+  const handleRequestSubmit = async ({ useType, endorsedBy }) => {
     try {
-      await requestFile(f);
+      await requestFile(requestingFile, { useType, endorsedBy });
+      setRequestingFile(null);
       showToast("File requested");
     } catch (e) {
       showToast(e.message);
     }
   };
 
-  const handleRemove = (r) => {
-    if (!window.confirm(`Remove this delivered request for "${r.clientName}"?`)) return;
-    deleteRequest(r.id);
+  const handleManualSubmit = async () => {
+    if (!manualForm.clientName.trim() || !manualForm.caseRef.trim()) return showToast("Fill in all required fields");
+    if (needsEndorsement && !manualForm.endorsedBy.trim()) return showToast("Endorsed by is required");
+    setManualBusy(true);
+    try {
+      await requestFileManual({
+        clientName: manualForm.clientName.trim(),
+        caseRef: manualForm.caseRef.trim(),
+        useType: manualForm.useType,
+        endorsedBy: needsEndorsement ? manualForm.endorsedBy.trim() : null,
+      });
+      setManualForm({ clientName: "", caseRef: "", useType: "Office Use", endorsedBy: "" });
+      setShowManualRequest(false);
+      showToast("Request submitted");
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setManualBusy(false);
+    }
   };
 
   const handleCancel = (r) => {
     if (!window.confirm(`Cancel your request for "${r.clientName}" (Case: ${r.caseReference})?`)) return;
-    cancelRequest(r, findFileByCaseRef(r.caseReference, files));
+    cancelRequest(r);
+  };
+
+  const handlePicReturn = (r) => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    if (!file) return;
+    if (!window.confirm(`Request return for "${file.clientName}" (Case: ${file.caseReference})?`)) return;
+    picRequestReturn(file);
   };
 
   const filtered = files.filter(f => {
@@ -887,12 +1124,14 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancel
 
       {tab === "dashboard" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Btn onClick={() => setShowManualRequest(true)}>+ Request File</Btn>
+          </div>
+
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>My File Requests</h3>
             <RequestTable
-              requests={sortRequestsByStatus(activeRequests, files)}
-              files={files}
-              onView={viewRequestFile}
+              requests={activeRequests} files={files} onView={viewRequestFile}
               renderActions={r => <Btn variant="danger" onClick={() => handleCancel(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Cancel</Btn>}
             />
           </div>
@@ -900,12 +1139,19 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancel
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Delivered</h3>
             <RequestTable
-              requests={deliveredRequests}
-              files={files}
-              statusFor={() => "Delivered"}
-              onView={viewRequestFile}
-              renderActions={r => <Btn variant="danger" onClick={() => handleRemove(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Remove</Btn>}
+              requests={deliveredRequests} files={files} statusFor={() => "Delivered"} onView={viewRequestFile}
+              renderActions={(r, file) => {
+                if (file && file.paymentStatus === "Paid to Ezzreca") {
+                  return <Btn variant="primary" onClick={() => handlePicReturn(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Return</Btn>;
+                }
+                return null;
+              }}
             />
+          </div>
+
+          <div>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Return Requests</h3>
+            <RequestTable requests={returnRequests} files={files} statusFor={() => "Return"} onView={viewRequestFile} />
           </div>
         </div>
       )}
@@ -913,33 +1159,60 @@ function PICPanel({ profile, files, requests, requestFile, deleteRequest, cancel
       {tab === "files" && (
         <div>
           <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
-          <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => setViewFileId(f.id)} onRequest={handleRequest} />
+          <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => setViewFileId(f.id)} onRequest={f => setRequestingFile(f)} />
         </div>
       )}
 
       {viewFile && <FileViewModal file={viewFile} onClose={() => setViewFileId(null)} />}
       {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
+      {requestingFile && <RequestFileModal file={requestingFile} profile={profile} onSubmit={handleRequestSubmit} onClose={() => setRequestingFile(null)} />}
+
+      {showManualRequest && (
+        <Modal title="Request File (Manual)" onClose={() => setShowManualRequest(false)}>
+          <Input label="Client Name" value={manualForm.clientName} onChange={e => setManualForm({ ...manualForm, clientName: e.target.value })} placeholder="Client full name" />
+          <Input label="Case Reference" value={manualForm.caseRef} onChange={e => setManualForm({ ...manualForm, caseRef: e.target.value })} placeholder="eg. 2000/1234" />
+          <Select label="Use Type" value={manualForm.useType} onChange={e => setManualForm({ ...manualForm, useType: e.target.value })} options={["Office Use", "Client Use"]} />
+          {needsEndorsement && (
+            <Input label="Endorsed By" value={manualForm.endorsedBy} onChange={e => setManualForm({ ...manualForm, endorsedBy: e.target.value })} placeholder="Name of endorsing partner" />
+          )}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <Btn variant="secondary" onClick={() => setShowManualRequest(false)} disabled={manualBusy}>Cancel</Btn>
+            <Btn onClick={handleManualSubmit} disabled={manualBusy}>Submit Request</Btn>
+          </div>
+        </Modal>
+      )}
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} showToast={showToast} changeMyPassword={changeMyPassword} />}
     </div>
   );
 }
 
-/* ── OP PANEL ─────────────────────────────────────────── */
-function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark, returnFile, showToast, changeMyPassword }) {
+/* ── OP PANEL ──────────────────────────────────────────── */
+function OPPanel({ profile, files, requests, addFile, updateFileFields, addRemark, opCompleteReturn, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
   const [viewFileId, setViewFileId] = useState(null);
   const [viewRequestId, setViewRequestId] = useState(null);
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
-  const [remark, setRemark] = useState("");
   const [busy, setBusy] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewRequest = requests.find(r => r.id === viewRequestId) || null;
-  const activeRequests = requests.filter(r => r.status !== "Delivered");
-  const deliveredRequests = requests.filter(r => r.status === "Delivered");
+
+  const incomingRequests = requests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    if (!file) return true;
+    return file.status !== "Delivered" && file.status !== "Return";
+  });
+  const deliveredRequests = requests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    return file && file.status === "Delivered";
+  });
+  const returnRequests = requests.filter(r => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    return file && file.status === "Return";
+  });
 
   const handleAddFile = async () => {
     if (!addForm.clientName.trim() || !addForm.caseRef.trim() || !addForm.boxRef.trim()) return showToast("Fill in all fields");
@@ -959,12 +1232,13 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
     const f = findFileByCaseRef(r.caseReference, files);
     if (!f) return setViewRequestId(r.id);
     setViewFileId(f.id);
-    setRemark(f.remarks || "");
   };
 
-  const handleReturn = (f) => {
-    if (!window.confirm(`Return "${f.clientName}" (Case: ${f.caseReference})? This resets status and payment status back to no status.`)) return;
-    returnFile(f);
+  const handleReturn = (r) => {
+    const file = findFileByCaseRef(r.caseReference, files);
+    if (!file) return;
+    if (!window.confirm(`Return "${file.clientName}" (Case: ${file.caseReference}) to file room? This resets all status and request info.`)) return;
+    opCompleteReturn(file);
   };
 
   const filtered = files.filter(f => {
@@ -979,7 +1253,7 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
         <Btn variant="secondary" onClick={() => setShowPw(true)} style={{ fontSize: 12 }}>Change Password</Btn>
       </div>
       <Tabs tabs={[
-        { id: "dashboard", label: "Dashboard", count: activeRequests.length },
+        { id: "dashboard", label: "Dashboard", count: incomingRequests.length },
         { id: "files", label: "File List" },
       ]} active={tab} onChange={setTab} />
 
@@ -995,23 +1269,24 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
-            <RequestTable
-              requests={sortRequestsByStatus(activeRequests, files)}
-              files={files}
-              showRequester
-              onView={viewRequestFile}
-            />
+            <RequestTable requests={incomingRequests} files={files} showRequester onView={viewRequestFile} />
           </div>
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Delivered</h3>
+            <RequestTable requests={deliveredRequests} files={files} showRequester statusFor={() => "Delivered"} onView={viewRequestFile} />
+          </div>
+
+          <div>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Return Requests</h3>
             <RequestTable
-              requests={deliveredRequests}
-              files={files}
-              showRequester
-              statusFor={(r, file) => (file && file.status) || "No Status"}
-              onView={viewRequestFile}
-              renderActions={(r, file) => file && <Btn variant="danger" onClick={() => handleReturn(file)} style={{ padding: "4px 10px", fontSize: 12 }}>Return</Btn>}
+              requests={returnRequests} files={files} showRequester statusFor={() => "Return"} onView={viewRequestFile}
+              renderActions={(r, file) => {
+                if (file && file.status === "Return" && file.paymentStatus === "Paid to Ezzreca") {
+                  return <Btn variant="success" onClick={() => handleReturn(r)} style={{ padding: "4px 10px", fontSize: 12 }}>Return</Btn>;
+                }
+                return null;
+              }}
             />
           </div>
         </div>
@@ -1020,13 +1295,11 @@ function OPPanel({ profile, files, requests, addFile, updateFileField, addRemark
       {tab === "files" && (
         <div>
           <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
-          <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => { setViewFileId(f.id); setRemark(f.remarks || ""); }} />
+          <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => setViewFileId(f.id)} />
         </div>
       )}
 
-      {viewFile && (
-        <FileEditModal file={viewFile} remark={remark} setRemark={setRemark} onClose={() => setViewFileId(null)} updateFileField={updateFileField} addRemark={addRemark} />
-      )}
+      {viewFile && <FileEditModal file={viewFile} requests={requests} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} />}
       {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} showToast={showToast} changeMyPassword={changeMyPassword} />}

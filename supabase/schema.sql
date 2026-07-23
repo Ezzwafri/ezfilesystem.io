@@ -9,7 +9,7 @@ create table public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   email text unique not null,
   name text not null,
-  role text not null check (role in ('admin', 'pic', 'op')),
+  role text not null check (role in ('admin', 'op', 'lawyer', 'partner')),
   disabled boolean not null default false,
   created_at timestamptz not null default now()
 );
@@ -25,6 +25,8 @@ create table public.files (
   logs jsonb not null default '[]'::jsonb,
   requested_by uuid references public.profiles (id),
   requested_by_name text,
+  use_type text,
+  endorsed_by_name text,
   created_by text,
   created_at timestamptz not null default now()
 );
@@ -37,6 +39,7 @@ create table public.requests (
   status text not null default 'Pending',
   requested_by uuid not null references public.profiles (id),
   requested_by_name text not null,
+  endorsed_by_name text,
   requested_at timestamptz not null default now()
 );
 
@@ -52,28 +55,40 @@ as $$
   select role from public.profiles where id = auth.uid() and not disabled;
 $$;
 
--- Lets any active staff member (including PIC, who has no general
--- files UPDATE permission) append a "Requested" log entry to a file,
--- and lets PIC reset a file's status when cancelling their own
--- request — without granting broader edit access to the files table.
-create or replace function public.log_file_request(p_case_reference text, p_time text, p_by text)
+-- Sets all request-related fields on a file and logs the request.
+create or replace function public.log_file_request(
+  p_case_reference text, p_time text, p_by text,
+  p_requested_by uuid, p_requested_by_name text,
+  p_use_type text, p_endorsed_by_name text default null
+)
 returns void
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_action text;
 begin
+  v_action := 'status changed to "Requested" — ' || p_use_type;
+  if p_endorsed_by_name is not null and p_endorsed_by_name <> '' then
+    v_action := v_action || ' — Endorsed by: ' || p_endorsed_by_name;
+  end if;
   update public.files
-  set logs = logs || jsonb_build_object('time', p_time, 'action', 'status changed to "Requested"', 'by', p_by)
+  set logs = logs || jsonb_build_object('time', p_time, 'action', v_action, 'by', p_by),
+      requested_by = p_requested_by,
+      requested_by_name = p_requested_by_name,
+      use_type = p_use_type,
+      endorsed_by_name = nullif(p_endorsed_by_name, '')
   where lower(trim(case_reference)) = lower(trim(p_case_reference))
     and public.current_role() is not null;
 end;
 $$;
 
-revoke all on function public.log_file_request(text, text, text) from public;
-grant execute on function public.log_file_request(text, text, text) to authenticated;
+revoke all on function public.log_file_request(text, text, text, uuid, text, text, text) from public;
+grant execute on function public.log_file_request(text, text, text, uuid, text, text, text) to authenticated;
 
-create or replace function public.pic_return_file(p_case_reference text, p_time text, p_by text)
+-- Clears request fields on a file when PIC cancels their request.
+create or replace function public.pic_cancel_request(p_case_reference text, p_time text, p_by text)
 returns void
 language plpgsql
 security definer
@@ -82,17 +97,37 @@ as $$
 begin
   update public.files
   set status = null, payment_status = null,
-      logs = logs || jsonb_build_object('time', p_time, 'action', 'File returned — status reset', 'by', p_by)
+      requested_by = null, requested_by_name = null,
+      use_type = null, endorsed_by_name = null,
+      logs = logs || jsonb_build_object('time', p_time, 'action', 'Request cancelled', 'by', p_by)
   where lower(trim(case_reference)) = lower(trim(p_case_reference))
     and public.current_role() is not null;
 end;
 $$;
 
-revoke all on function public.pic_return_file(text, text, text) from public;
-grant execute on function public.pic_return_file(text, text, text) to authenticated;
+revoke all on function public.pic_cancel_request(text, text, text) from public;
+grant execute on function public.pic_cancel_request(text, text, text) to authenticated;
 
-revoke all on function public.set_file_requester(text, uuid, text) from public;
-grant execute on function public.set_file_requester(text, uuid, text) to authenticated;
+-- PIC sets file status to "Return" (only when payment is "Paid to Ezzreca").
+create or replace function public.pic_request_return(p_case_reference text, p_time text, p_by text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.files
+  set status = 'Return',
+      logs = logs || jsonb_build_object('time', p_time, 'action', 'status changed to "Return"', 'by', p_by)
+  where lower(trim(case_reference)) = lower(trim(p_case_reference))
+    and requested_by = auth.uid()
+    and payment_status = 'Paid to Ezzreca'
+    and public.current_role() in ('lawyer', 'partner');
+end;
+$$;
+
+revoke all on function public.pic_request_return(text, text, text) from public;
+grant execute on function public.pic_request_return(text, text, text) to authenticated;
 
 -- ── Row level security ──────────────────────────────────
 
@@ -100,8 +135,7 @@ alter table public.profiles enable row level security;
 alter table public.files enable row level security;
 alter table public.requests enable row level security;
 
--- profiles: any active staff member can see the member list;
--- only admins can add/edit members.
+-- profiles
 create policy "active staff can view profiles"
   on public.profiles for select
   using (public.current_role() is not null);
@@ -114,7 +148,7 @@ create policy "admins can edit members"
   on public.profiles for update
   using (public.current_role() = 'admin');
 
--- files: any active staff member can view; only op/admin can add or edit.
+-- files
 create policy "active staff can view files"
   on public.files for select
   using (public.current_role() is not null);
@@ -131,16 +165,15 @@ create policy "admins can delete files"
   on public.files for delete
   using (public.current_role() = 'admin');
 
--- requests: any active staff member can view;
--- pic/admin can submit, op/admin can update status.
+-- requests
 create policy "active staff can view requests"
   on public.requests for select
   using (public.current_role() is not null);
 
-create policy "pic and admin can submit requests"
+create policy "staff can submit requests"
   on public.requests for insert
   with check (
-    public.current_role() in ('pic', 'admin')
+    public.current_role() in ('lawyer', 'partner', 'admin')
     and requested_by = auth.uid()
   );
 
@@ -152,10 +185,10 @@ create policy "op and admin can delete requests"
   on public.requests for delete
   using (public.current_role() in ('op', 'admin'));
 
-create policy "pic can remove own requests"
+create policy "lawyer partner can remove own requests"
   on public.requests for delete
   using (
-    public.current_role() = 'pic'
+    public.current_role() in ('lawyer', 'partner')
     and requested_by = auth.uid()
   );
 
