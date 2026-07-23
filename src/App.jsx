@@ -394,7 +394,7 @@ function RequestDetailModal({ request, onClose }) {
 function RequestFileModal({ file, profile, onSubmit, onClose }) {
   const [useType, setUseType] = useState("Office Use");
   const [endorsedBy, setEndorsedBy] = useState("");
-  const needsEndorsement = profile.role === "lawyer" || profile.role === "partner";
+  const needsEndorsement = profile.role === "lawyer";
 
   const handleSubmit = () => {
     if (needsEndorsement && !endorsedBy.trim()) return;
@@ -1064,7 +1064,7 @@ function PICPanel({ profile, files, requests, requestFile, requestFileManual, ca
     return file && file.status === "Return";
   });
 
-  const needsEndorsement = profile.role === "lawyer" || profile.role === "partner";
+  const needsEndorsement = profile.role === "lawyer";
 
   const viewRequestFile = (r) => {
     const f = findFileByCaseRef(r.caseReference, files);
