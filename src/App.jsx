@@ -78,7 +78,8 @@ function getPayStatusOptions(useType) {
 function splitLogs(logs) {
   const all = logs || [];
   const isRemark = l => l.action.startsWith("Remark added");
-  const isRequest = l => l.action.startsWith('status changed to "Requested"') || l.action.startsWith("Linked to request");
+  const isRequest = l => l.action.startsWith('status changed to "Requested"') || l.action.startsWith("Linked to request")
+    || l.action.startsWith('status changed to "Return"') || l.action.startsWith("File returned to file room");
   return {
     history: all.filter(l => !isRemark(l) && !isRequest(l)),
     requests: all.filter(isRequest),
@@ -561,6 +562,7 @@ export default function App() {
   };
 
   const FIELD_TO_COLUMN = { paymentStatus: "payment_status", clientName: "client_name", caseReference: "case_reference", boxReference: "box_reference" };
+  const FIELD_LABELS = { clientName: "Client Name", caseReference: "Case Reference", boxReference: "Box Reference", status: "File Status", paymentStatus: "Payment Status" };
 
   const updateFileFields = async (file, changes) => {
     const dbUpdates = {};
@@ -568,7 +570,9 @@ export default function App() {
     for (const [field, value] of Object.entries(changes)) {
       const dbField = FIELD_TO_COLUMN[field] || field;
       dbUpdates[dbField] = value;
-      newLogs.push({ time: ts(), action: `${field} changed to "${value}"`, by: profile.name });
+      const oldVal = file[field] || "No Status";
+      const newVal = value || "No Status";
+      newLogs.push({ time: ts(), action: `${FIELD_LABELS[field] || field} edited from "${oldVal}" to "${newVal}"`, by: profile.name });
     }
     dbUpdates.logs = newLogs;
     const { error } = await supabase.from("files").update(dbUpdates).eq("id", file.id);
