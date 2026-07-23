@@ -31,7 +31,8 @@ const ROLE_COLORS = {
 
 function genPassword() {
   const c = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$";
-  return Array.from({ length: 10 }, () => c[Math.floor(Math.random() * c.length)]).join("");
+  const bytes = crypto.getRandomValues(new Uint32Array(10));
+  return Array.from(bytes, b => c[b % c.length]).join("");
 }
 function ts() { return new Date().toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }); }
 
@@ -269,7 +270,7 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
   );
 }
 
-function FileEditModal({ file, requests, onClose, updateFileFields, addRemark, onDelete }) {
+function FileEditModal({ file, onClose, updateFileFields, addRemark, onDelete }) {
   const [edits, setEdits] = useState({
     clientName: file.clientName,
     caseReference: file.caseReference,
@@ -689,9 +690,10 @@ export default function App() {
     </div>
   );
 
-  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} profile={profile} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (isPicLike) return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} requestFileManual={requestFileManual} cancelRequest={cancelRequest} picRequestReturn={picRequestReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "op") return shell(<OPPanel profile={profile} files={files} requests={requests} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "op") return shell(<OPPanel files={files} requests={requests} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  return shell(<div style={{ color: "#dc2626", fontWeight: 600 }}>Unrecognized account role "{profile.role}". Contact an administrator.</div>);
 }
 
 /* ── LOGIN ─────────────────────────────────────────────── */
@@ -788,7 +790,7 @@ function ChangePasswordModal({ onClose, showToast, changeMyPassword }) {
 }
 
 /* ── ADMIN PANEL ───────────────────────────────────────── */
-function AdminPanel({ profiles, profile, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, updateFileFields, addRemark, deleteFile, opCompleteReturn, showToast, changeMyPassword }) {
+function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, updateFileFields, addRemark, deleteFile, opCompleteReturn, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showAdd, setShowAdd] = useState(false);
   const [showPw, setShowPw] = useState(false);
@@ -990,7 +992,7 @@ function AdminPanel({ profiles, profile, files, requests, addMember, resetMember
         </div>
       )}
 
-      {viewFile && <FileEditModal file={viewFile} requests={requests} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} onDelete={handleDelete} />}
+      {viewFile && <FileEditModal file={viewFile} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} onDelete={handleDelete} />}
       {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
 
       {showAdd && (
@@ -1197,7 +1199,7 @@ function PICPanel({ profile, files, requests, requestFile, requestFileManual, ca
 }
 
 /* ── OP PANEL ──────────────────────────────────────────── */
-function OPPanel({ profile, files, requests, addFile, updateFileFields, addRemark, opCompleteReturn, showToast, changeMyPassword }) {
+function OPPanel({ files, requests, addFile, updateFileFields, addRemark, opCompleteReturn, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
@@ -1308,7 +1310,7 @@ function OPPanel({ profile, files, requests, addFile, updateFileFields, addRemar
         </div>
       )}
 
-      {viewFile && <FileEditModal file={viewFile} requests={requests} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} />}
+      {viewFile && <FileEditModal file={viewFile} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} />}
       {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} showToast={showToast} changeMyPassword={changeMyPassword} />}
