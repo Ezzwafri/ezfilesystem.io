@@ -77,9 +77,12 @@ function getPayStatusOptions(useType) {
 }
 function splitLogs(logs) {
   const all = logs || [];
+  const isRemark = l => l.action.startsWith("Remark added");
+  const isRequest = l => l.action.startsWith('status changed to "Requested"') || l.action.startsWith("Linked to request");
   return {
-    history: all.filter(l => !l.action.startsWith("Remark added")),
-    remarks: all.filter(l => l.action.startsWith("Remark added")),
+    history: all.filter(l => !isRemark(l) && !isRequest(l)),
+    requests: all.filter(isRequest),
+    remarks: all.filter(isRemark),
   };
 }
 
@@ -277,7 +280,7 @@ function FileEditModal({ file, requests, onClose, updateFileFields, addRemark, o
   const [dirty, setDirty] = useState(false);
 
   const payOptions = getPayStatusOptions(file.useType);
-  const { history, remarks: remarkLogs } = splitLogs(file.logs);
+  const { history, requests: requestLogs, remarks: remarkLogs } = splitLogs(file.logs);
 
   const set = (field, value) => {
     setEdits(prev => ({ ...prev, [field]: value }));
@@ -323,6 +326,7 @@ function FileEditModal({ file, requests, onClose, updateFileFields, addRemark, o
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Date Added</span><div>{file.createdAt ? new Date(file.createdAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : "—"}</div></div>
         <Select label="File Status" value={edits.status} onChange={e => set("status", e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...FILE_STATUSES]} />
         <Select label="Payment Status" value={edits.paymentStatus} onChange={e => set("paymentStatus", e.target.value)} options={[{ value: "", label: "— Select Payment Status —" }, ...payOptions]} />
+        <LogColumn title="Log Request" entries={requestLogs} />
         <div>
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>Remarks</label>
           <textarea value={remarkText} onChange={e => setRemarkText(e.target.value)} rows={3} placeholder={file.remarks || "No remarks"}
@@ -343,7 +347,7 @@ function FileEditModal({ file, requests, onClose, updateFileFields, addRemark, o
 }
 
 function FileViewModal({ file, onClose }) {
-  const { history, remarks: remarkLogs } = splitLogs(file.logs);
+  const { history, requests: requestLogs, remarks: remarkLogs } = splitLogs(file.logs);
   return (
     <Modal title="File Details" onClose={onClose}>
       <div style={{ display: "grid", gap: 12 }}>
@@ -360,6 +364,7 @@ function FileViewModal({ file, onClose }) {
           </div>
         )}
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Date Added</span><div>{file.createdAt ? new Date(file.createdAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : "—"}</div></div>
+        <LogColumn title="Log Request" entries={requestLogs} />
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Remarks</span><div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, minHeight: 40, fontSize: 14 }}>{file.remarks || "No remarks"}</div></div>
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <LogColumn title="Log History" entries={history} />
