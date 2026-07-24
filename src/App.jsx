@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase, createDetachedClient } from "./supabaseClient";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 const FILE_STATUSES = ["Searching", "Found", "Pending Delivery", "Delivered"];
 const CLIENT_USE_PAY_STATUSES = [
@@ -64,6 +66,9 @@ function anyRequestFor(file, requests) {
 function isFileLocked(file, requests) {
   return !!file.requestedBy || !!anyRequestFor(file, requests);
 }
+function isBoxRefMissing(file) {
+  return !file.boxReference || !file.boxReference.trim();
+}
 function extractYear(caseRef) {
   const match = (caseRef || "").match(/(19|20)\d{2}/);
   return match ? parseInt(match[0], 10) : 0;
@@ -76,6 +81,175 @@ function getPayStatusOptions(useType) {
   if (useType === "Office Use") return OFFICE_USE_PAY_STATUSES;
   return ALL_PAY_STATUSES;
 }
+
+const EXPORT_COLUMNS = ["Client / Case", "Box Ref", "Requested By", "Status", "Payment Status"];
+
+function fileExportRow(f, requests) {
+  const locked = isFileLocked(f, requests);
+  return [
+    `${f.clientName} (Case: ${f.caseReference})`,
+    f.boxReference || "Missing",
+    f.requestedByName || "",
+    f.status || (locked ? "Request" : null) || "No Status",
+    f.paymentStatus || "No Status",
+  ];
+}
+
+function csvEscape(value) {
+  const s = String(value ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadFilesCSV(files, requests) {
+  const rows = files.map(f => fileExportRow(f, requests));
+  const csv = [EXPORT_COLUMNS, ...rows].map(row => row.map(csvEscape).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ezri-file-list-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadFilesPDF(files, requests) {
+  const rows = files.map(f => fileExportRow(f, requests));
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text("Ezri File System — File List", 14, 16);
+  doc.setFontSize(10);
+  doc.text(ts(), 14, 22);
+  autoTable(doc, { head: [EXPORT_COLUMNS], body: rows, startY: 28, styles: { fontSize: 9 } });
+  doc.save(`ezri-file-list-${Date.now()}.pdf`);
+}
+
+function FileListExport({ files, requests }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+      <span style={{ fontSize: 12, color: "#94a3b8" }}>{files.length} file{files.length === 1 ? "" : "s"} in this list</span>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn variant="secondary" onClick={() => downloadFilesCSV(files, requests)} style={{ padding: "6px 14px", fontSize: 12 }}>Export CSV</Btn>
+        <Btn variant="secondary" onClick={() => downloadFilesPDF(files, requests)} style={{ padding: "6px 14px", fontSize: 12 }}>Export PDF</Btn>
+      </div>
+    </div>
+  );
+}
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field); field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      rows.push(row); row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter(r => !(r.length === 1 && r[0] === ""));
+}
+
+function downloadAddFileTemplate() {
+  const csv = "Client Name,Case Reference,Box Reference\r\n";
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "ezri-bulk-add-template.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function BulkAddFilesCard({ bulkAddFiles, showToast }) {
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rows = parseCSV(String(reader.result || ""));
+      if (rows.length === 0) { showToast("CSV is empty"); setPreview(null); return; }
+      const header = rows[0].map(h => (h || "").trim().toLowerCase());
+      const clientIdx = header.findIndex(h => h.startsWith("client"));
+      const caseIdx = header.findIndex(h => h.startsWith("case"));
+      const boxIdx = header.findIndex(h => h.startsWith("box"));
+      if (clientIdx === -1 || caseIdx === -1) {
+        showToast("CSV must have Client Name and Case Reference columns");
+        setPreview(null);
+        return;
+      }
+      let skipped = 0;
+      const valid = [];
+      for (const row of rows.slice(1)) {
+        const clientName = (row[clientIdx] || "").trim();
+        const caseRef = (row[caseIdx] || "").trim();
+        const boxRef = boxIdx === -1 ? "" : (row[boxIdx] || "").trim();
+        if (!clientName || !caseRef) { skipped++; continue; }
+        valid.push({ clientName, caseRef, boxRef });
+      }
+      setPreview({ valid, skipped });
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImport = async () => {
+    if (!preview || preview.valid.length === 0) return;
+    setBusy(true);
+    try {
+      const count = await bulkAddFiles(preview.valid);
+      showToast(`${count} file${count === 1 ? "" : "s"} added`);
+      setPreview(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card style={{ maxWidth: 480, flex: "1 1 320px" }}>
+      <h3 style={{ color: "#1e293b", marginTop: 0 }}>Bulk Add Files</h3>
+      <p style={{ fontSize: 12, color: "#64748b", marginTop: -6 }}>Import a CSV with Client Name, Case Reference, and an optional Box Reference column.</p>
+      <Btn variant="secondary" onClick={downloadAddFileTemplate} style={{ marginBottom: 12 }}>Download CSV Template</Btn>
+      <div>
+        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>Import CSV</label>
+        <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFileSelect} style={{ fontSize: 13 }} />
+      </div>
+      {preview && (
+        <div style={{ marginTop: 12, fontSize: 13, color: "#334155" }}>
+          <div>
+            {preview.valid.length} file{preview.valid.length === 1 ? "" : "s"} ready to import
+            {preview.skipped > 0 ? `, ${preview.skipped} row${preview.skipped === 1 ? "" : "s"} skipped (missing client name or case reference)` : ""}.
+          </div>
+          <Btn onClick={handleImport} disabled={busy || preview.valid.length === 0} style={{ marginTop: 8, width: "100%" }}>
+            {busy ? "Importing..." : `Import ${preview.valid.length} File${preview.valid.length === 1 ? "" : "s"}`}
+          </Btn>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function splitLogs(logs) {
   const all = logs || [];
   const isRemark = l => l.action.startsWith("Remark added");
@@ -194,7 +368,7 @@ function FileTable({ files, requests, onView, onDelete, onRequest }) {
                   <div style={{ fontWeight: 600, color: "#1e293b" }}>{f.clientName}</div>
                   <div style={{ fontSize: 13, color: "#64748b" }}>Case: {f.caseReference}</div>
                 </td>
-                <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{f.boxReference}</td>
+                <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{f.boxReference || <Badge text="Missing" color="#dc2626" />}</td>
                 <td style={{ padding: "12px", color: "#475569", fontSize: 14 }}>{f.requestedByName || ""}</td>
                 <td style={{ padding: "12px" }}><Badge text={displayStatus || "No Status"} color={STATUS_COLORS[displayStatus] || "#94a3b8"} /></td>
                 <td style={{ padding: "12px" }}><Badge text={f.paymentStatus || "No Status"} color={STATUS_COLORS[f.paymentStatus] || "#94a3b8"} /></td>
@@ -551,6 +725,33 @@ export default function App() {
     return mapFile(data);
   };
 
+  const bulkAddFiles = async (rows) => {
+    const inserts = rows.map(r => ({
+      client_name: r.clientName, case_reference: r.caseRef, box_reference: r.boxRef || "",
+      remarks: "",
+      logs: [{ time: ts(), action: "File added to system (bulk import)", by: profile.name }],
+      created_by: profile.name,
+    }));
+    const { data, error } = await supabase.from("files").insert(inserts).select();
+    if (error) throw new Error(error.message);
+    const newFiles = (data || []).map(mapFile);
+    for (const nf of newFiles) {
+      const pendingReq = requests.find(r => normalizeRef(r.caseReference) === normalizeRef(nf.caseReference));
+      if (pendingReq) {
+        const linkLog = { time: ts(), action: `Linked to request — ${pendingReq.useType}${pendingReq.endorsedByName ? ` — Endorsed by: ${pendingReq.endorsedByName}` : ""}`, by: profile.name };
+        await supabase.from("files").update({
+          requested_by: pendingReq.requestedBy,
+          requested_by_name: pendingReq.requestedByName,
+          use_type: pendingReq.useType,
+          endorsed_by_name: pendingReq.endorsedByName || null,
+          logs: [...(nf.logs || []), linkLog],
+        }).eq("id", nf.id);
+      }
+    }
+    await fetchFiles();
+    return newFiles.length;
+  };
+
   const deleteFile = async (file) => {
     const { error } = await supabase.from("files").delete().eq("id", file.id);
     if (error) return showToast(error.message);
@@ -690,9 +891,9 @@ export default function App() {
     </div>
   );
 
-  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (isPicLike) return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} requestFileManual={requestFileManual} cancelRequest={cancelRequest} picRequestReturn={picRequestReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "op") return shell(<OPPanel files={files} requests={requests} addFile={addFile} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "op") return shell(<OPPanel files={files} requests={requests} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
   return shell(<div style={{ color: "#dc2626", fontWeight: 600 }}>Unrecognized account role "{profile.role}". Contact an administrator.</div>);
 }
 
@@ -790,7 +991,7 @@ function ChangePasswordModal({ onClose, showToast, changeMyPassword }) {
 }
 
 /* ── ADMIN PANEL ───────────────────────────────────────── */
-function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, updateFileFields, addRemark, deleteFile, opCompleteReturn, showToast, changeMyPassword }) {
+function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, bulkAddFiles, updateFileFields, addRemark, deleteFile, opCompleteReturn, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showAdd, setShowAdd] = useState(false);
   const [showPw, setShowPw] = useState(false);
@@ -805,6 +1006,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   const [viewRequestId, setViewRequestId] = useState(null);
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [addBusy, setAddBusy] = useState(false);
+  const [missingBoxOnly, setMissingBoxOnly] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewRequest = requests.find(r => r.id === viewRequestId) || null;
@@ -823,9 +1025,11 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
     return file && file.status === "Return";
   });
 
+  const missingBoxCount = files.filter(isBoxRefMissing).length;
   const filteredFiles = files.filter(f => {
     const s = search.toLowerCase();
-    return !s || f.clientName.toLowerCase().includes(s) || f.caseReference.toLowerCase().includes(s) || f.boxReference.toLowerCase().includes(s);
+    const matchesSearch = !s || f.clientName.toLowerCase().includes(s) || f.caseReference.toLowerCase().includes(s) || f.boxReference.toLowerCase().includes(s);
+    return matchesSearch && (!missingBoxOnly || isBoxRefMissing(f));
   });
 
   const handleDelete = (f) => {
@@ -835,7 +1039,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   };
 
   const handleAddFile = async () => {
-    if (!addForm.clientName.trim() || !addForm.caseRef.trim() || !addForm.boxRef.trim()) return showToast("Fill in all fields");
+    if (!addForm.clientName.trim() || !addForm.caseRef.trim()) return showToast("Fill in client name and case reference");
     setAddBusy(true);
     try {
       await addFile({ clientName: addForm.clientName.trim(), caseRef: addForm.caseRef.trim(), boxRef: addForm.boxRef.trim() });
@@ -903,13 +1107,16 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
 
       {tab === "dashboard" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-          <Card style={{ maxWidth: 480 }}>
-            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Add New File</h3>
-            <Input label="Client Name" value={addForm.clientName} onChange={e => setAddForm({ ...addForm, clientName: e.target.value })} placeholder="Client full name" />
-            <Input label="Case Reference" value={addForm.caseRef} onChange={e => setAddForm({ ...addForm, caseRef: e.target.value })} placeholder="eg. 2000/1234" />
-            <Input label="Box Reference" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
-            <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={addBusy}>Add File</Btn>
-          </Card>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+            <Card style={{ maxWidth: 480, flex: "1 1 320px" }}>
+              <h3 style={{ color: "#1e293b", marginTop: 0 }}>Add New File</h3>
+              <Input label="Client Name" value={addForm.clientName} onChange={e => setAddForm({ ...addForm, clientName: e.target.value })} placeholder="Client full name" />
+              <Input label="Case Reference" value={addForm.caseRef} onChange={e => setAddForm({ ...addForm, caseRef: e.target.value })} placeholder="eg. 2000/1234" />
+              <Input label="Box Reference (optional)" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
+              <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={addBusy}>Add File</Btn>
+            </Card>
+            <BulkAddFilesCard bulkAddFiles={bulkAddFiles} showToast={showToast} />
+          </div>
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
@@ -987,8 +1194,16 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
 
       {tab === "files" && (
         <div>
-          <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            <div style={{ flex: 1 }}>
+              <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <Btn variant={missingBoxOnly ? "primary" : "secondary"} onClick={() => setMissingBoxOnly(v => !v)} style={{ whiteSpace: "nowrap" }}>
+              Missing Box Ref{missingBoxCount > 0 ? ` (${missingBoxCount})` : ""}
+            </Btn>
+          </div>
           <FileTable files={sortFilesByYear(filteredFiles)} requests={requests} onView={f => setViewFileId(f.id)} onDelete={handleDelete} />
+          <FileListExport files={sortFilesByYear(filteredFiles)} requests={requests} />
         </div>
       )}
 
@@ -1199,7 +1414,7 @@ function PICPanel({ profile, files, requests, requestFile, requestFileManual, ca
 }
 
 /* ── OP PANEL ──────────────────────────────────────────── */
-function OPPanel({ files, requests, addFile, updateFileFields, addRemark, opCompleteReturn, showToast, changeMyPassword }) {
+function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, addRemark, opCompleteReturn, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
@@ -1207,6 +1422,7 @@ function OPPanel({ files, requests, addFile, updateFileFields, addRemark, opComp
   const [viewRequestId, setViewRequestId] = useState(null);
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [busy, setBusy] = useState(false);
+  const [missingBoxOnly, setMissingBoxOnly] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewRequest = requests.find(r => r.id === viewRequestId) || null;
@@ -1226,7 +1442,7 @@ function OPPanel({ files, requests, addFile, updateFileFields, addRemark, opComp
   });
 
   const handleAddFile = async () => {
-    if (!addForm.clientName.trim() || !addForm.caseRef.trim() || !addForm.boxRef.trim()) return showToast("Fill in all fields");
+    if (!addForm.clientName.trim() || !addForm.caseRef.trim()) return showToast("Fill in client name and case reference");
     setBusy(true);
     try {
       await addFile({ clientName: addForm.clientName.trim(), caseRef: addForm.caseRef.trim(), boxRef: addForm.boxRef.trim() });
@@ -1252,9 +1468,11 @@ function OPPanel({ files, requests, addFile, updateFileFields, addRemark, opComp
     opCompleteReturn(file);
   };
 
+  const missingBoxCount = files.filter(isBoxRefMissing).length;
   const filtered = files.filter(f => {
     const s = search.toLowerCase();
-    return !s || f.clientName.toLowerCase().includes(s) || f.caseReference.toLowerCase().includes(s) || f.boxReference.toLowerCase().includes(s);
+    const matchesSearch = !s || f.clientName.toLowerCase().includes(s) || f.caseReference.toLowerCase().includes(s) || f.boxReference.toLowerCase().includes(s);
+    return matchesSearch && (!missingBoxOnly || isBoxRefMissing(f));
   });
 
   return (
@@ -1270,13 +1488,16 @@ function OPPanel({ files, requests, addFile, updateFileFields, addRemark, opComp
 
       {tab === "dashboard" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-          <Card style={{ maxWidth: 480 }}>
-            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Add New File</h3>
-            <Input label="Client Name" value={addForm.clientName} onChange={e => setAddForm({ ...addForm, clientName: e.target.value })} placeholder="Client full name" />
-            <Input label="Case Reference" value={addForm.caseRef} onChange={e => setAddForm({ ...addForm, caseRef: e.target.value })} placeholder="eg. 2000/1234" />
-            <Input label="Box Reference" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
-            <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={busy}>Add File</Btn>
-          </Card>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+            <Card style={{ maxWidth: 480, flex: "1 1 320px" }}>
+              <h3 style={{ color: "#1e293b", marginTop: 0 }}>Add New File</h3>
+              <Input label="Client Name" value={addForm.clientName} onChange={e => setAddForm({ ...addForm, clientName: e.target.value })} placeholder="Client full name" />
+              <Input label="Case Reference" value={addForm.caseRef} onChange={e => setAddForm({ ...addForm, caseRef: e.target.value })} placeholder="eg. 2000/1234" />
+              <Input label="Box Reference (optional)" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
+              <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={busy}>Add File</Btn>
+            </Card>
+            <BulkAddFilesCard bulkAddFiles={bulkAddFiles} showToast={showToast} />
+          </div>
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
@@ -1305,8 +1526,16 @@ function OPPanel({ files, requests, addFile, updateFileFields, addRemark, opComp
 
       {tab === "files" && (
         <div>
-          <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            <div style={{ flex: 1 }}>
+              <Input placeholder="Search by client name, case reference, or box reference..." value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <Btn variant={missingBoxOnly ? "primary" : "secondary"} onClick={() => setMissingBoxOnly(v => !v)} style={{ whiteSpace: "nowrap" }}>
+              Missing Box Ref{missingBoxCount > 0 ? ` (${missingBoxCount})` : ""}
+            </Btn>
+          </div>
           <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => setViewFileId(f.id)} />
+          <FileListExport files={sortFilesByYear(filtered)} requests={requests} />
         </div>
       )}
 
