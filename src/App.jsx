@@ -176,7 +176,7 @@ function downloadAddFileTemplate() {
   URL.revokeObjectURL(url);
 }
 
-function BulkAddFilesCard({ bulkAddFiles, showToast }) {
+function BulkAddFilesCard({ bulkAddFiles, showToast, files }) {
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef(null);
@@ -197,16 +197,22 @@ function BulkAddFilesCard({ bulkAddFiles, showToast }) {
         setPreview(null);
         return;
       }
-      let skipped = 0;
+      const existingRefs = new Set(files.map(f => normalizeRef(f.caseReference)));
+      const seenInBatch = new Set();
+      let skippedMissing = 0;
+      let skippedDuplicate = 0;
       const valid = [];
       for (const row of rows.slice(1)) {
         const clientName = (row[clientIdx] || "").trim();
         const caseRef = (row[caseIdx] || "").trim();
         const boxRef = boxIdx === -1 ? "" : (row[boxIdx] || "").trim();
-        if (!clientName || !caseRef) { skipped++; continue; }
+        if (!clientName || !caseRef) { skippedMissing++; continue; }
+        const norm = normalizeRef(caseRef);
+        if (existingRefs.has(norm) || seenInBatch.has(norm)) { skippedDuplicate++; continue; }
+        seenInBatch.add(norm);
         valid.push({ clientName, caseRef, boxRef });
       }
-      setPreview({ valid, skipped });
+      setPreview({ valid, skippedMissing, skippedDuplicate });
     };
     reader.readAsText(file);
   };
@@ -239,7 +245,8 @@ function BulkAddFilesCard({ bulkAddFiles, showToast }) {
         <div style={{ marginTop: 12, fontSize: 13, color: "#334155" }}>
           <div>
             {preview.valid.length} file{preview.valid.length === 1 ? "" : "s"} ready to import
-            {preview.skipped > 0 ? `, ${preview.skipped} row${preview.skipped === 1 ? "" : "s"} skipped (missing client name or case reference)` : ""}.
+            {preview.skippedMissing > 0 ? `, ${preview.skippedMissing} row${preview.skippedMissing === 1 ? "" : "s"} skipped (missing client name or case reference)` : ""}
+            {preview.skippedDuplicate > 0 ? `, ${preview.skippedDuplicate} row${preview.skippedDuplicate === 1 ? "" : "s"} skipped (case reference already exists)` : ""}.
           </div>
           <Btn onClick={handleImport} disabled={busy || preview.valid.length === 0} style={{ marginTop: 8, width: "100%" }}>
             {busy ? "Importing..." : `Import ${preview.valid.length} File${preview.valid.length === 1 ? "" : "s"}`}
@@ -393,7 +400,8 @@ function FileTable({ files, requests, onView, onDelete, onRequest }) {
   );
 }
 
-function RequestTable({ requests, files, showRequester, statusFor, onView, renderActions }) {
+function RequestTable({ requests, files, showRequester, showPayment = true, statusFor, onView, renderActions }) {
+  const colCount = 1 + (showRequester ? 1 : 0) + 1 + 1 + (showPayment ? 1 : 0) + 1;
   return (
     <Card style={{ padding: 0, overflow: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -403,7 +411,7 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
             {showRequester && <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>REQUESTED BY</th>}
             <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>USE TYPE</th>
             <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>STATUS</th>
-            <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>PAYMENT STATUS</th>
+            {showPayment && <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>PAYMENT STATUS</th>}
             <th style={{ padding: "10px 12px", color: "#64748b", fontSize: 12, fontWeight: 600 }}>ACTIONS</th>
           </tr>
         </thead>
@@ -427,7 +435,7 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
                 )}
                 <td style={{ padding: "12px" }}><Badge text={r.useType || "—"} color={r.useType === "Client Use" ? "#6366f1" : "#059669"} /></td>
                 <td style={{ padding: "12px" }}><Badge text={status} color={STATUS_COLORS[status] || "#94a3b8"} /></td>
-                <td style={{ padding: "12px" }}><Badge text={payment} color={STATUS_COLORS[payment] || "#94a3b8"} /></td>
+                {showPayment && <td style={{ padding: "12px" }}><Badge text={payment} color={STATUS_COLORS[payment] || "#94a3b8"} /></td>}
                 <td style={{ padding: "12px" }}>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <Btn variant="secondary" onClick={() => onView(r)} style={{ padding: "4px 10px", fontSize: 12 }}>View</Btn>
@@ -437,7 +445,7 @@ function RequestTable({ requests, files, showRequester, statusFor, onView, rende
               </tr>
             );
           })}
-          {requests.length === 0 && <tr><td colSpan={showRequester ? 6 : 5} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>No requests found</td></tr>}
+          {requests.length === 0 && <tr><td colSpan={colCount} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>No requests found</td></tr>}
         </tbody>
       </table>
     </Card>
@@ -560,6 +568,39 @@ function RequestDetailModal({ request, onClose }) {
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Use Type</span><div style={{ fontWeight: 600 }}>{request.useType}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span><div style={{ fontWeight: 600 }}>{request.requestedByName || "—"}{request.endorsedByName ? ` (Endorsed by: ${request.endorsedByName})` : ""}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested At</span><div>{request.requestedAt ? new Date(request.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div></div>
+        <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>This case hasn't been added to the file system yet.</p>
+      </div>
+    </Modal>
+  );
+}
+
+const NOT_IN_FILE_LIST_STATUSES = ["Searching", "Found"];
+
+function IncomingNewCaseModal({ request, onClose, onSetStatus, onMarkFound }) {
+  const currentStatus = NOT_IN_FILE_LIST_STATUSES.includes(request.status) ? request.status : "";
+
+  const handleChange = async (value) => {
+    if (value === "Found") {
+      if (!window.confirm(`Mark "${request.clientName}" (Case: ${request.caseReference}) as Found? This will add it to the file system.`)) return;
+      const ok = await onMarkFound(request);
+      if (ok) onClose();
+    } else if (value === "Searching") {
+      await onSetStatus(request, "Searching");
+    }
+  };
+
+  return (
+    <Modal title="File Details — Not In File List" onClose={onClose}>
+      <div style={{ display: "grid", gap: 12 }}>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Client Name</span><div style={{ fontWeight: 600 }}>{request.clientName}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Case Reference</span><div style={{ fontWeight: 600 }}>{request.caseReference}</div></div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Use Type</span><div style={{ marginTop: 2 }}><Badge text={request.useType || "—"} color={request.useType === "Client Use" ? "#6366f1" : "#059669"} /></div></div>
+        <div>
+          <span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span>
+          <div style={{ fontWeight: 500 }}>{request.requestedByName || "—"}{request.endorsedByName ? ` (Endorsed by: ${request.endorsedByName})` : ""}</div>
+        </div>
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested At</span><div>{request.requestedAt ? new Date(request.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div></div>
+        <Select label="Status" value={currentStatus} onChange={e => handleChange(e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...NOT_IN_FILE_LIST_STATUSES]} />
         <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>This case hasn't been added to the file system yet.</p>
       </div>
     </Modal>
@@ -703,6 +744,7 @@ export default function App() {
   };
 
   const addFile = async ({ clientName, caseRef, boxRef }) => {
+    if (findFileByCaseRef(caseRef, files)) throw new Error("A file with this case reference already exists");
     const { data, error } = await supabase.from("files").insert({
       client_name: clientName, case_reference: caseRef, box_reference: boxRef,
       remarks: "",
@@ -726,7 +768,16 @@ export default function App() {
   };
 
   const bulkAddFiles = async (rows) => {
-    const inserts = rows.map(r => ({
+    const existingRefs = new Set(files.map(f => normalizeRef(f.caseReference)));
+    const seen = new Set();
+    const toInsert = rows.filter(r => {
+      const norm = normalizeRef(r.caseRef);
+      if (existingRefs.has(norm) || seen.has(norm)) return false;
+      seen.add(norm);
+      return true;
+    });
+    if (toInsert.length === 0) return 0;
+    const inserts = toInsert.map(r => ({
       client_name: r.clientName, case_reference: r.caseRef, box_reference: r.boxRef || "",
       remarks: "",
       logs: [{ time: ts(), action: "File added to system (bulk import)", by: profile.name }],
@@ -851,14 +902,20 @@ export default function App() {
     showToast("Return requested");
   };
 
-  const opCompleteReturn = async (file) => {
-    const log = { time: ts(), action: "File returned to file room", by: profile.name };
-    const { error } = await supabase.from("files").update({
+  const opCompleteReturn = async (file, boxRefOverride) => {
+    const logs = [...(file.logs || [])];
+    const updates = {
       status: null, payment_status: null,
       requested_by: null, requested_by_name: null,
       use_type: null, endorsed_by_name: null,
-      logs: [...(file.logs || []), log],
-    }).eq("id", file.id);
+    };
+    if (boxRefOverride) {
+      updates.box_reference = boxRefOverride;
+      logs.push({ time: ts(), action: `Box Reference edited from "${file.boxReference || "Missing"}" to "${boxRefOverride}"`, by: profile.name });
+    }
+    logs.push({ time: ts(), action: "File returned to file room", by: profile.name });
+    updates.logs = logs;
+    const { error } = await supabase.from("files").update(updates).eq("id", file.id);
     if (error) return showToast(error.message);
     const linkedRequests = requests.filter(r => normalizeRef(r.caseReference) === normalizeRef(file.caseReference));
     if (linkedRequests.length > 0) {
@@ -866,6 +923,36 @@ export default function App() {
     }
     await Promise.all([fetchFiles(), fetchRequests()]);
     showToast("File returned");
+  };
+
+  const setIncomingRequestStatus = async (request, status) => {
+    const { error } = await supabase.from("requests").update({ status }).eq("id", request.id);
+    if (error) return showToast(error.message);
+    await fetchRequests();
+    showToast(`Status set to ${status}`);
+  };
+
+  const markIncomingRequestFound = async (request) => {
+    if (findFileByCaseRef(request.caseReference, files)) {
+      showToast("A file with this case reference already exists");
+      return false;
+    }
+    const logs = [
+      { time: ts(), action: "File added to system", by: profile.name },
+      { time: ts(), action: `Linked to request — ${request.useType}${request.endorsedByName ? ` — Endorsed by: ${request.endorsedByName}` : ""}`, by: profile.name },
+      { time: ts(), action: 'File Status edited from "No Status" to "Found"', by: profile.name },
+    ];
+    const { error } = await supabase.from("files").insert({
+      client_name: request.clientName, case_reference: request.caseReference, box_reference: "",
+      status: "Found", remarks: "",
+      requested_by: request.requestedBy, requested_by_name: request.requestedByName,
+      use_type: request.useType, endorsed_by_name: request.endorsedByName || null,
+      logs, created_by: profile.name,
+    });
+    if (error) { showToast(error.message); return false; }
+    await fetchFiles();
+    showToast("File added to system");
+    return true;
   };
 
   if (booting) return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "Inter, system-ui, sans-serif", color: "#64748b" }}>Loading...</div>;
@@ -891,9 +978,9 @@ export default function App() {
     </div>
   );
 
-  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} setIncomingRequestStatus={setIncomingRequestStatus} markIncomingRequestFound={markIncomingRequestFound} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (isPicLike) return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} requestFileManual={requestFileManual} cancelRequest={cancelRequest} picRequestReturn={picRequestReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "op") return shell(<OPPanel files={files} requests={requests} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "op") return shell(<OPPanel files={files} requests={requests} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} setIncomingRequestStatus={setIncomingRequestStatus} markIncomingRequestFound={markIncomingRequestFound} showToast={showToast} changeMyPassword={changeMyPassword} />);
   return shell(<div style={{ color: "#dc2626", fontWeight: 600 }}>Unrecognized account role "{profile.role}". Contact an administrator.</div>);
 }
 
@@ -991,7 +1078,7 @@ function ChangePasswordModal({ onClose, showToast, changeMyPassword }) {
 }
 
 /* ── ADMIN PANEL ───────────────────────────────────────── */
-function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, bulkAddFiles, updateFileFields, addRemark, deleteFile, opCompleteReturn, showToast, changeMyPassword }) {
+function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, bulkAddFiles, updateFileFields, addRemark, deleteFile, opCompleteReturn, setIncomingRequestStatus, markIncomingRequestFound, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showAdd, setShowAdd] = useState(false);
   const [showPw, setShowPw] = useState(false);
@@ -1003,19 +1090,19 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
   const [viewFileId, setViewFileId] = useState(null);
-  const [viewRequestId, setViewRequestId] = useState(null);
+  const [viewNewCaseId, setViewNewCaseId] = useState(null);
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [addBusy, setAddBusy] = useState(false);
   const [missingBoxOnly, setMissingBoxOnly] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
-  const viewRequest = requests.find(r => r.id === viewRequestId) || null;
+  const viewNewCase = requests.find(r => r.id === viewNewCaseId) || null;
 
-  const incomingRequests = requests.filter(r => {
+  const incomingRequestsInFileList = requests.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
-    if (!file) return true;
-    return file.status !== "Delivered" && file.status !== "Return";
+    return !!file && file.status !== "Delivered" && file.status !== "Return";
   });
+  const incomingRequestsNotInFileList = requests.filter(r => !findFileByCaseRef(r.caseReference, files));
   const deliveredRequests = requests.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return file && file.status === "Delivered";
@@ -1082,15 +1169,20 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
 
   const viewRequestFile = (r) => {
     const f = findFileByCaseRef(r.caseReference, files);
-    if (!f) return setViewRequestId(r.id);
-    setViewFileId(f.id);
+    if (f) setViewFileId(f.id);
   };
 
   const handleReturn = (r) => {
     const file = findFileByCaseRef(r.caseReference, files);
     if (!file) return;
+    let boxRef;
+    if (isBoxRefMissing(file)) {
+      const entered = window.prompt(`Enter Box Reference for "${file.clientName}" (Case: ${file.caseReference}) — required before returning:`);
+      if (!entered || !entered.trim()) return showToast("Box Reference is required to return this file");
+      boxRef = entered.trim();
+    }
     if (!window.confirm(`Return "${file.clientName}" (Case: ${file.caseReference}) to file room?`)) return;
-    opCompleteReturn(file);
+    opCompleteReturn(file, boxRef);
   };
 
   return (
@@ -1100,7 +1192,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
         <Btn variant="secondary" onClick={() => setShowPw(true)} style={{ fontSize: 12 }}>Change My Password</Btn>
       </div>
       <Tabs tabs={[
-        { id: "dashboard", label: "Dashboard", count: incomingRequests.length },
+        { id: "dashboard", label: "Dashboard", count: incomingRequestsInFileList.length + incomingRequestsNotInFileList.length },
         { id: "members", label: "Members" },
         { id: "files", label: "File List" },
       ]} active={tab} onChange={setTab} />
@@ -1115,12 +1207,17 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
               <Input label="Box Reference (optional)" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
               <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={addBusy}>Add File</Btn>
             </Card>
-            <BulkAddFilesCard bulkAddFiles={bulkAddFiles} showToast={showToast} />
+            <BulkAddFilesCard bulkAddFiles={bulkAddFiles} showToast={showToast} files={files} />
           </div>
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
-            <RequestTable requests={incomingRequests} files={files} showRequester onView={viewRequestFile} />
+            <RequestTable requests={incomingRequestsInFileList} files={files} showRequester onView={viewRequestFile} />
+          </div>
+
+          <div>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests (Not In File List)</h3>
+            <RequestTable requests={incomingRequestsNotInFileList} files={files} showRequester showPayment={false} statusFor={r => NOT_IN_FILE_LIST_STATUSES.includes(r.status) ? r.status : "Request"} onView={r => setViewNewCaseId(r.id)} />
           </div>
 
           <div>
@@ -1208,7 +1305,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
       )}
 
       {viewFile && <FileEditModal file={viewFile} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} onDelete={handleDelete} />}
-      {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
+      {viewNewCase && <IncomingNewCaseModal request={viewNewCase} onClose={() => setViewNewCaseId(null)} onSetStatus={setIncomingRequestStatus} onMarkFound={markIncomingRequestFound} />}
 
       {showAdd && (
         <Modal title="Add New Member" onClose={() => setShowAdd(false)}>
@@ -1414,24 +1511,24 @@ function PICPanel({ profile, files, requests, requestFile, requestFileManual, ca
 }
 
 /* ── OP PANEL ──────────────────────────────────────────── */
-function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, addRemark, opCompleteReturn, showToast, changeMyPassword }) {
+function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, addRemark, opCompleteReturn, setIncomingRequestStatus, markIncomingRequestFound, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
   const [viewFileId, setViewFileId] = useState(null);
-  const [viewRequestId, setViewRequestId] = useState(null);
+  const [viewNewCaseId, setViewNewCaseId] = useState(null);
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [busy, setBusy] = useState(false);
   const [missingBoxOnly, setMissingBoxOnly] = useState(false);
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
-  const viewRequest = requests.find(r => r.id === viewRequestId) || null;
+  const viewNewCase = requests.find(r => r.id === viewNewCaseId) || null;
 
-  const incomingRequests = requests.filter(r => {
+  const incomingRequestsInFileList = requests.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
-    if (!file) return true;
-    return file.status !== "Delivered" && file.status !== "Return";
+    return !!file && file.status !== "Delivered" && file.status !== "Return";
   });
+  const incomingRequestsNotInFileList = requests.filter(r => !findFileByCaseRef(r.caseReference, files));
   const deliveredRequests = requests.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return file && file.status === "Delivered";
@@ -1457,15 +1554,20 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
 
   const viewRequestFile = (r) => {
     const f = findFileByCaseRef(r.caseReference, files);
-    if (!f) return setViewRequestId(r.id);
-    setViewFileId(f.id);
+    if (f) setViewFileId(f.id);
   };
 
   const handleReturn = (r) => {
     const file = findFileByCaseRef(r.caseReference, files);
     if (!file) return;
+    let boxRef;
+    if (isBoxRefMissing(file)) {
+      const entered = window.prompt(`Enter Box Reference for "${file.clientName}" (Case: ${file.caseReference}) — required before returning:`);
+      if (!entered || !entered.trim()) return showToast("Box Reference is required to return this file");
+      boxRef = entered.trim();
+    }
     if (!window.confirm(`Return "${file.clientName}" (Case: ${file.caseReference}) to file room? This resets all status and request info.`)) return;
-    opCompleteReturn(file);
+    opCompleteReturn(file, boxRef);
   };
 
   const missingBoxCount = files.filter(isBoxRefMissing).length;
@@ -1482,7 +1584,7 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
         <Btn variant="secondary" onClick={() => setShowPw(true)} style={{ fontSize: 12 }}>Change Password</Btn>
       </div>
       <Tabs tabs={[
-        { id: "dashboard", label: "Dashboard", count: incomingRequests.length },
+        { id: "dashboard", label: "Dashboard", count: incomingRequestsInFileList.length + incomingRequestsNotInFileList.length },
         { id: "files", label: "File List" },
       ]} active={tab} onChange={setTab} />
 
@@ -1496,12 +1598,17 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
               <Input label="Box Reference (optional)" value={addForm.boxRef} onChange={e => setAddForm({ ...addForm, boxRef: e.target.value })} placeholder="eg. EZR123" />
               <Btn onClick={handleAddFile} style={{ width: "100%", marginTop: 8 }} disabled={busy}>Add File</Btn>
             </Card>
-            <BulkAddFilesCard bulkAddFiles={bulkAddFiles} showToast={showToast} />
+            <BulkAddFilesCard bulkAddFiles={bulkAddFiles} showToast={showToast} files={files} />
           </div>
 
           <div>
             <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests</h3>
-            <RequestTable requests={incomingRequests} files={files} showRequester onView={viewRequestFile} />
+            <RequestTable requests={incomingRequestsInFileList} files={files} showRequester onView={viewRequestFile} />
+          </div>
+
+          <div>
+            <h3 style={{ color: "#1e293b", marginTop: 0 }}>Incoming Requests (Not In File List)</h3>
+            <RequestTable requests={incomingRequestsNotInFileList} files={files} showRequester showPayment={false} statusFor={r => NOT_IN_FILE_LIST_STATUSES.includes(r.status) ? r.status : "Request"} onView={r => setViewNewCaseId(r.id)} />
           </div>
 
           <div>
@@ -1540,7 +1647,7 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
       )}
 
       {viewFile && <FileEditModal file={viewFile} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} />}
-      {viewRequest && <RequestDetailModal request={viewRequest} onClose={() => setViewRequestId(null)} />}
+      {viewNewCase && <IncomingNewCaseModal request={viewNewCase} onClose={() => setViewNewCaseId(null)} onSetStatus={setIncomingRequestStatus} onMarkFound={markIncomingRequestFound} />}
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} showToast={showToast} changeMyPassword={changeMyPassword} />}
     </div>

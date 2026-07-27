@@ -31,6 +31,10 @@ create table public.files (
   created_at timestamptz not null default now()
 );
 
+-- Block duplicate case references (case-insensitive) on new inserts and
+-- edits, without requiring existing data to already be unique — see
+-- prevent_duplicate_case_reference() below, defined after current_role().
+
 create table public.requests (
   id uuid primary key default gen_random_uuid(),
   case_reference text not null,
@@ -54,6 +58,30 @@ set search_path = public
 as $$
   select role from public.profiles where id = auth.uid() and not disabled;
 $$;
+
+-- Blocks a new insert or a case_reference edit from colliding with any
+-- other existing file, case-insensitively. Does not touch existing
+-- duplicates — it only ever checks the row being written right now.
+create or replace function public.prevent_duplicate_case_reference()
+returns trigger
+language plpgsql
+as $$
+begin
+  if exists (
+    select 1 from public.files
+    where lower(trim(case_reference)) = lower(trim(new.case_reference))
+      and id <> new.id
+  ) then
+    raise exception 'A file with this case reference already exists';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger trg_prevent_duplicate_case_reference
+before insert or update of case_reference on public.files
+for each row
+execute function public.prevent_duplicate_case_reference();
 
 -- Sets all request-related fields on a file and logs the request.
 create or replace function public.log_file_request(
