@@ -261,7 +261,8 @@ function splitLogs(logs) {
   const all = logs || [];
   const isRemark = l => l.action.startsWith("Remark added");
   const isRequest = l => l.action.startsWith('status changed to "Requested"') || l.action.startsWith("Linked to request")
-    || l.action.startsWith('status changed to "Return"') || l.action.startsWith("File returned to file room");
+    || l.action.startsWith('status changed to "Return"') || l.action.startsWith("File returned to file room")
+    || l.action.startsWith("Request submitted");
   return {
     history: all.filter(l => !isRemark(l) && !isRequest(l)),
     requests: all.filter(isRequest),
@@ -560,6 +561,7 @@ function FileViewModal({ file, onClose }) {
 }
 
 function RequestDetailModal({ request, onClose }) {
+  const { history, requests: requestLogs, remarks: remarkLogs } = splitLogs(request.logs);
   return (
     <Modal title="Request Details" onClose={onClose}>
       <div style={{ display: "grid", gap: 12 }}>
@@ -569,6 +571,12 @@ function RequestDetailModal({ request, onClose }) {
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested By</span><div style={{ fontWeight: 600 }}>{request.requestedByName || "—"}{request.endorsedByName ? ` (Endorsed by: ${request.endorsedByName})` : ""}</div></div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested At</span><div>{request.requestedAt ? new Date(request.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div></div>
         <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>This case hasn't been added to the file system yet.</p>
+        <LogColumn title="Log Request" entries={requestLogs} />
+        <div><span style={{ fontSize: 12, color: "#64748b" }}>Remarks</span><div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, minHeight: 40, fontSize: 14 }}>{request.remarks || "No remarks"}</div></div>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <LogColumn title="Log History" entries={history} />
+          <LogColumn title="Log Remarks" entries={remarkLogs} />
+        </div>
       </div>
     </Modal>
   );
@@ -579,7 +587,7 @@ const NOT_IN_FILE_LIST_STATUSES = ["Searching", "Found"];
 function IncomingNewCaseModal({ request, onClose, onSetStatus, onMarkFound, addRequestRemark }) {
   const [remarkText, setRemarkText] = useState("");
   const currentStatus = NOT_IN_FILE_LIST_STATUSES.includes(request.status) ? request.status : "";
-  const { history, remarks: remarkLogs } = splitLogs(request.logs);
+  const { history, requests: requestLogs, remarks: remarkLogs } = splitLogs(request.logs);
 
   const handleChange = async (value) => {
     if (value === "Found") {
@@ -610,6 +618,7 @@ function IncomingNewCaseModal({ request, onClose, onSetStatus, onMarkFound, addR
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested At</span><div>{request.requestedAt ? new Date(request.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div></div>
         <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>This case hasn't been added to the file system yet.</p>
         <Select label="Status" value={currentStatus} onChange={e => handleChange(e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...NOT_IN_FILE_LIST_STATUSES]} />
+        <LogColumn title="Log Request" entries={requestLogs} />
         <div>
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>Remarks</label>
           <textarea value={remarkText} onChange={e => setRemarkText(e.target.value)} rows={3} placeholder={request.remarks || "No remarks"}
