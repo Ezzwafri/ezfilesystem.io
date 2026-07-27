@@ -44,6 +44,8 @@ create table public.requests (
   requested_by uuid not null references public.profiles (id),
   requested_by_name text not null,
   endorsed_by_name text,
+  logs jsonb not null default '[]'::jsonb,
+  remarks text not null default '',
   requested_at timestamptz not null default now()
 );
 

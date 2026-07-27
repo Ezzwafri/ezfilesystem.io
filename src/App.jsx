@@ -52,7 +52,7 @@ function mapRequest(row) {
     id: row.id, caseReference: row.case_reference, clientName: row.client_name,
     useType: row.use_type, status: row.status, requestedBy: row.requested_by,
     requestedByName: row.requested_by_name, endorsedByName: row.endorsed_by_name,
-    requestedAt: row.requested_at,
+    requestedAt: row.requested_at, logs: row.logs || [], remarks: row.remarks || "",
   };
 }
 
@@ -576,8 +576,10 @@ function RequestDetailModal({ request, onClose }) {
 
 const NOT_IN_FILE_LIST_STATUSES = ["Searching", "Found"];
 
-function IncomingNewCaseModal({ request, onClose, onSetStatus, onMarkFound }) {
+function IncomingNewCaseModal({ request, onClose, onSetStatus, onMarkFound, addRequestRemark }) {
+  const [remarkText, setRemarkText] = useState("");
   const currentStatus = NOT_IN_FILE_LIST_STATUSES.includes(request.status) ? request.status : "";
+  const { history, remarks: remarkLogs } = splitLogs(request.logs);
 
   const handleChange = async (value) => {
     if (value === "Found") {
@@ -587,6 +589,12 @@ function IncomingNewCaseModal({ request, onClose, onSetStatus, onMarkFound }) {
     } else if (value === "Searching") {
       await onSetStatus(request, "Searching");
     }
+  };
+
+  const handleAddRemark = () => {
+    if (!remarkText.trim()) return;
+    addRequestRemark(request, remarkText.trim());
+    setRemarkText("");
   };
 
   return (
@@ -600,8 +608,18 @@ function IncomingNewCaseModal({ request, onClose, onSetStatus, onMarkFound }) {
           <div style={{ fontWeight: 500 }}>{request.requestedByName || "—"}{request.endorsedByName ? ` (Endorsed by: ${request.endorsedByName})` : ""}</div>
         </div>
         <div><span style={{ fontSize: 12, color: "#64748b" }}>Requested At</span><div>{request.requestedAt ? new Date(request.requestedAt).toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" }) : ""}</div></div>
-        <Select label="Status" value={currentStatus} onChange={e => handleChange(e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...NOT_IN_FILE_LIST_STATUSES]} />
         <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>This case hasn't been added to the file system yet.</p>
+        <Select label="Status" value={currentStatus} onChange={e => handleChange(e.target.value)} options={[{ value: "", label: "— Select Status —" }, ...NOT_IN_FILE_LIST_STATUSES]} />
+        <div>
+          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>Remarks</label>
+          <textarea value={remarkText} onChange={e => setRemarkText(e.target.value)} rows={3} placeholder={request.remarks || "No remarks"}
+            style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
+          <Btn variant="secondary" onClick={handleAddRemark} style={{ marginTop: 6 }}>Save Remark</Btn>
+        </div>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <LogColumn title="Log History" entries={history} />
+          <LogColumn title="Log Remarks" entries={remarkLogs} />
+        </div>
       </div>
     </Modal>
   );
@@ -855,6 +873,7 @@ export default function App() {
       case_reference: file.caseReference, client_name: file.clientName, use_type: useType,
       status: "Pending", requested_by: profile.id, requested_by_name: profile.name,
       endorsed_by_name: endorsedBy || null,
+      logs: [{ time: ts(), action: `Request submitted — ${useType}${endorsedBy ? ` — Endorsed by: ${endorsedBy}` : ""}`, by: profile.name }],
     });
     if (error) throw new Error(error.message);
     await supabase.rpc("log_file_request", {
@@ -872,6 +891,7 @@ export default function App() {
       case_reference: caseRef, client_name: clientName, use_type: useType,
       status: "Pending", requested_by: profile.id, requested_by_name: profile.name,
       endorsed_by_name: endorsedBy || null,
+      logs: [{ time: ts(), action: `Request submitted — ${useType}${endorsedBy ? ` — Endorsed by: ${endorsedBy}` : ""}`, by: profile.name }],
     });
     if (error) throw new Error(error.message);
     const existingFile = findFileByCaseRef(caseRef, files);
@@ -926,10 +946,21 @@ export default function App() {
   };
 
   const setIncomingRequestStatus = async (request, status) => {
-    const { error } = await supabase.from("requests").update({ status }).eq("id", request.id);
+    const oldStatus = NOT_IN_FILE_LIST_STATUSES.includes(request.status) ? request.status : "No Status";
+    const log = { time: ts(), action: `Status edited from "${oldStatus}" to "${status}"`, by: profile.name };
+    const { error } = await supabase.from("requests").update({ status, logs: [...(request.logs || []), log] }).eq("id", request.id);
     if (error) return showToast(error.message);
     await fetchRequests();
     showToast(`Status set to ${status}`);
+  };
+
+  const addIncomingRequestRemark = async (request, remarkText) => {
+    if (!remarkText.trim()) return;
+    const log = { time: ts(), action: `Remark added: "${remarkText.trim()}"`, by: profile.name };
+    const { error } = await supabase.from("requests").update({ remarks: remarkText.trim(), logs: [...(request.logs || []), log] }).eq("id", request.id);
+    if (error) return showToast(error.message);
+    await fetchRequests();
+    showToast("Remark added");
   };
 
   const markIncomingRequestFound = async (request) => {
@@ -938,13 +969,14 @@ export default function App() {
       return false;
     }
     const logs = [
+      ...(request.logs || []),
       { time: ts(), action: "File added to system", by: profile.name },
       { time: ts(), action: `Linked to request — ${request.useType}${request.endorsedByName ? ` — Endorsed by: ${request.endorsedByName}` : ""}`, by: profile.name },
       { time: ts(), action: 'File Status edited from "No Status" to "Found"', by: profile.name },
     ];
     const { error } = await supabase.from("files").insert({
       client_name: request.clientName, case_reference: request.caseReference, box_reference: "",
-      status: "Found", remarks: "",
+      status: "Found", remarks: request.remarks || "",
       requested_by: request.requestedBy, requested_by_name: request.requestedByName,
       use_type: request.useType, endorsed_by_name: request.endorsedByName || null,
       logs, created_by: profile.name,
@@ -978,9 +1010,9 @@ export default function App() {
     </div>
   );
 
-  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} setIncomingRequestStatus={setIncomingRequestStatus} markIncomingRequestFound={markIncomingRequestFound} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "admin") return shell(<AdminPanel profiles={profiles.filter(p => p.id !== profile.id)} files={files} requests={requests} addMember={addMember} resetMemberPassword={resetMemberPassword} setMemberDisabled={setMemberDisabled} renameMember={renameMember} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} deleteFile={deleteFile} opCompleteReturn={opCompleteReturn} setIncomingRequestStatus={setIncomingRequestStatus} markIncomingRequestFound={markIncomingRequestFound} addIncomingRequestRemark={addIncomingRequestRemark} showToast={showToast} changeMyPassword={changeMyPassword} />);
   if (isPicLike) return shell(<PICPanel profile={profile} files={files} requests={requests} requestFile={requestFile} requestFileManual={requestFileManual} cancelRequest={cancelRequest} picRequestReturn={picRequestReturn} showToast={showToast} changeMyPassword={changeMyPassword} />);
-  if (profile.role === "op") return shell(<OPPanel files={files} requests={requests} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} setIncomingRequestStatus={setIncomingRequestStatus} markIncomingRequestFound={markIncomingRequestFound} showToast={showToast} changeMyPassword={changeMyPassword} />);
+  if (profile.role === "op") return shell(<OPPanel files={files} requests={requests} addFile={addFile} bulkAddFiles={bulkAddFiles} updateFileFields={updateFileFields} addRemark={addRemark} opCompleteReturn={opCompleteReturn} setIncomingRequestStatus={setIncomingRequestStatus} markIncomingRequestFound={markIncomingRequestFound} addIncomingRequestRemark={addIncomingRequestRemark} showToast={showToast} changeMyPassword={changeMyPassword} />);
   return shell(<div style={{ color: "#dc2626", fontWeight: 600 }}>Unrecognized account role "{profile.role}". Contact an administrator.</div>);
 }
 
@@ -1078,7 +1110,7 @@ function ChangePasswordModal({ onClose, showToast, changeMyPassword }) {
 }
 
 /* ── ADMIN PANEL ───────────────────────────────────────── */
-function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, bulkAddFiles, updateFileFields, addRemark, deleteFile, opCompleteReturn, setIncomingRequestStatus, markIncomingRequestFound, showToast, changeMyPassword }) {
+function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword, setMemberDisabled, renameMember, addFile, bulkAddFiles, updateFileFields, addRemark, deleteFile, opCompleteReturn, setIncomingRequestStatus, markIncomingRequestFound, addIncomingRequestRemark, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showAdd, setShowAdd] = useState(false);
   const [showPw, setShowPw] = useState(false);
@@ -1305,7 +1337,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
       )}
 
       {viewFile && <FileEditModal file={viewFile} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} onDelete={handleDelete} />}
-      {viewNewCase && <IncomingNewCaseModal request={viewNewCase} onClose={() => setViewNewCaseId(null)} onSetStatus={setIncomingRequestStatus} onMarkFound={markIncomingRequestFound} />}
+      {viewNewCase && <IncomingNewCaseModal request={viewNewCase} onClose={() => setViewNewCaseId(null)} onSetStatus={setIncomingRequestStatus} onMarkFound={markIncomingRequestFound} addRequestRemark={addIncomingRequestRemark} />}
 
       {showAdd && (
         <Modal title="Add New Member" onClose={() => setShowAdd(false)}>
@@ -1511,7 +1543,7 @@ function PICPanel({ profile, files, requests, requestFile, requestFileManual, ca
 }
 
 /* ── OP PANEL ──────────────────────────────────────────── */
-function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, addRemark, opCompleteReturn, setIncomingRequestStatus, markIncomingRequestFound, showToast, changeMyPassword }) {
+function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, addRemark, opCompleteReturn, setIncomingRequestStatus, markIncomingRequestFound, addIncomingRequestRemark, showToast, changeMyPassword }) {
   const [tab, setTab] = useState("dashboard");
   const [showPw, setShowPw] = useState(false);
   const [search, setSearch] = useState("");
@@ -1647,7 +1679,7 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
       )}
 
       {viewFile && <FileEditModal file={viewFile} onClose={() => setViewFileId(null)} updateFileFields={updateFileFields} addRemark={addRemark} />}
-      {viewNewCase && <IncomingNewCaseModal request={viewNewCase} onClose={() => setViewNewCaseId(null)} onSetStatus={setIncomingRequestStatus} onMarkFound={markIncomingRequestFound} />}
+      {viewNewCase && <IncomingNewCaseModal request={viewNewCase} onClose={() => setViewNewCaseId(null)} onSetStatus={setIncomingRequestStatus} onMarkFound={markIncomingRequestFound} addRequestRemark={addIncomingRequestRemark} />}
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} showToast={showToast} changeMyPassword={changeMyPassword} />}
     </div>
