@@ -76,6 +76,35 @@ function extractYear(caseRef) {
 function sortFilesByYear(files) {
   return files.slice().sort((a, b) => extractYear(b.caseReference) - extractYear(a.caseReference));
 }
+function extractBoxNumber(boxRef) {
+  const match = (boxRef || "").match(/\d+/);
+  return match ? parseInt(match[0], 10) : Infinity;
+}
+function sortFiles(files, field, dir) {
+  const rawExtractor = field === "box" ? f => extractBoxNumber(f.boxReference) : f => extractYear(f.caseReference);
+  const extractor = f => {
+    const v = rawExtractor(f);
+    return (v === 0 || v === Infinity) ? Infinity : v;
+  };
+  const mul = dir === "asc" ? 1 : -1;
+  return files.slice().sort((a, b) => {
+    const av = extractor(a), bv = extractor(b);
+    if (av === Infinity && bv === Infinity) return 0;
+    if (av === Infinity) return 1;
+    if (bv === Infinity) return -1;
+    return (av - bv) * mul;
+  });
+}
+const SortControls = ({ field, setField, dir, setDir }) => (
+  <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "12px 0" }}>
+    <span style={{ fontSize: 12, color: "#64748b", fontWeight: 600 }}>Sort by:</span>
+    <Btn variant={field === "year" ? "primary" : "secondary"} onClick={() => setField("year")} style={{ padding: "4px 10px", fontSize: 12 }}>Year</Btn>
+    <Btn variant={field === "box" ? "primary" : "secondary"} onClick={() => setField("box")} style={{ padding: "4px 10px", fontSize: 12 }}>Box Ref</Btn>
+    <Btn variant="secondary" onClick={() => setDir(d => d === "asc" ? "desc" : "asc")} style={{ padding: "4px 10px", fontSize: 12 }}>
+      {dir === "asc" ? "↑ Ascending" : "↓ Descending"}
+    </Btn>
+  </div>
+);
 function getPayStatusOptions(useType) {
   if (useType === "Client Use") return CLIENT_USE_PAY_STATUSES;
   if (useType === "Office Use") return OFFICE_USE_PAY_STATUSES;
@@ -1135,6 +1164,8 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [addBusy, setAddBusy] = useState(false);
   const [missingBoxOnly, setMissingBoxOnly] = useState(false);
+  const [sortField, setSortField] = useState("year");
+  const [sortDir, setSortDir] = useState("desc");
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewNewCase = requests.find(r => r.id === viewNewCaseId) || null;
@@ -1340,8 +1371,9 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
               Missing Box Ref{missingBoxCount > 0 ? ` (${missingBoxCount})` : ""}
             </Btn>
           </div>
-          <FileTable files={sortFilesByYear(filteredFiles)} requests={requests} onView={f => setViewFileId(f.id)} onDelete={handleDelete} />
-          <FileListExport files={sortFilesByYear(filteredFiles)} requests={requests} />
+          <SortControls field={sortField} setField={setSortField} dir={sortDir} setDir={setSortDir} />
+          <FileTable files={sortFiles(filteredFiles, sortField, sortDir)} requests={requests} onView={f => setViewFileId(f.id)} onDelete={handleDelete} />
+          <FileListExport files={sortFiles(filteredFiles, sortField, sortDir)} requests={requests} />
         </div>
       )}
 
@@ -1561,6 +1593,8 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
   const [addForm, setAddForm] = useState({ clientName: "", caseRef: "", boxRef: "" });
   const [busy, setBusy] = useState(false);
   const [missingBoxOnly, setMissingBoxOnly] = useState(false);
+  const [sortField, setSortField] = useState("year");
+  const [sortDir, setSortDir] = useState("desc");
 
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewNewCase = requests.find(r => r.id === viewNewCaseId) || null;
@@ -1682,8 +1716,9 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
               Missing Box Ref{missingBoxCount > 0 ? ` (${missingBoxCount})` : ""}
             </Btn>
           </div>
-          <FileTable files={sortFilesByYear(filtered)} requests={requests} onView={f => setViewFileId(f.id)} />
-          <FileListExport files={sortFilesByYear(filtered)} requests={requests} />
+          <SortControls field={sortField} setField={setSortField} dir={sortDir} setDir={setSortDir} />
+          <FileTable files={sortFiles(filtered, sortField, sortDir)} requests={requests} onView={f => setViewFileId(f.id)} />
+          <FileListExport files={sortFiles(filtered, sortField, sortDir)} requests={requests} />
         </div>
       )}
 
