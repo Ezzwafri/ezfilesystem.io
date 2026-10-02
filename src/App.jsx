@@ -430,6 +430,17 @@ function FileTable({ files, requests, onView, onDelete, onRequest }) {
   );
 }
 
+// Files given a status directly in the file list (no request attached) shown as dashboard rows
+function fileOnlyEntries(files, requests) {
+  return files
+    .filter(f => f.status && !anyRequestFor(f, requests))
+    .map(f => ({
+      id: `file-${f.id}`, caseReference: f.caseReference, clientName: f.clientName,
+      useType: f.useType, status: f.status, requestedByName: f.requestedByName || "",
+      endorsedByName: f.endorsedByName, requestedAt: f.createdAt,
+    }));
+}
+
 function RequestTable({ requests, files, showRequester, showPayment = true, statusFor, onView, renderActions }) {
   const colCount = 1 + (showRequester ? 1 : 0) + 1 + 1 + (showPayment ? 1 : 0) + 1;
   return (
@@ -1077,7 +1088,7 @@ function LoginScreen({ showToast, toast }) {
           <p style={{ color: "#64748b", margin: 0, fontSize: 13 }}>Physical File Tracking & Management</p>
         </div>
         <Card style={{ width: 340, textAlign: "left" }}>
-          <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@ezri.my" />
+          <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com" />
           <Input label="Password" type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Enter password"
             onKeyDown={e => { if (e.key === "Enter") submit(); }} />
           <Btn style={{ width: "100%", marginTop: 4 }} onClick={submit} disabled={busy}>Sign In</Btn>
@@ -1170,16 +1181,17 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewNewCase = requests.find(r => r.id === viewNewCaseId) || null;
 
-  const incomingRequestsInFileList = requests.filter(r => {
+  const dashboardEntries = [...requests, ...fileOnlyEntries(files, requests)];
+  const incomingRequestsInFileList = dashboardEntries.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return !!file && file.status !== "Delivered" && file.status !== "Return";
   });
   const incomingRequestsNotInFileList = requests.filter(r => !findFileByCaseRef(r.caseReference, files));
-  const deliveredRequests = requests.filter(r => {
+  const deliveredRequests = dashboardEntries.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return file && file.status === "Delivered";
   });
-  const returnRequests = requests.filter(r => {
+  const returnRequests = dashboardEntries.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return file && file.status === "Return";
   });
@@ -1212,8 +1224,8 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
   };
 
   const handleAddMember = async () => {
-    const email = form.email.includes("@") ? form.email : form.email + "@ezri.my";
-    if (!email.endsWith("@ezri.my")) return showToast("Email must end with @ezri.my");
+    const email = form.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showToast("Enter a valid email address");
     if (!form.name.trim()) return showToast("Name is required");
     setBusy(true);
     try {
@@ -1383,7 +1395,7 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
       {showAdd && (
         <Modal title="Add New Member" onClose={() => setShowAdd(false)}>
           <Input label="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Full name" />
-          <Input label="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="name@ezri.my" />
+          <Input label="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" />
           <Select label="Role" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}
             options={[{ value: "lawyer", label: "Lawyer" }, { value: "partner", label: "Partner" }, { value: "op", label: "Operations Manager" }]} />
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -1599,16 +1611,17 @@ function OPPanel({ files, requests, addFile, bulkAddFiles, updateFileFields, add
   const viewFile = files.find(f => f.id === viewFileId) || null;
   const viewNewCase = requests.find(r => r.id === viewNewCaseId) || null;
 
-  const incomingRequestsInFileList = requests.filter(r => {
+  const dashboardEntries = [...requests, ...fileOnlyEntries(files, requests)];
+  const incomingRequestsInFileList = dashboardEntries.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return !!file && file.status !== "Delivered" && file.status !== "Return";
   });
   const incomingRequestsNotInFileList = requests.filter(r => !findFileByCaseRef(r.caseReference, files));
-  const deliveredRequests = requests.filter(r => {
+  const deliveredRequests = dashboardEntries.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return file && file.status === "Delivered";
   });
-  const returnRequests = requests.filter(r => {
+  const returnRequests = dashboardEntries.filter(r => {
     const file = findFileByCaseRef(r.caseReference, files);
     return file && file.status === "Return";
   });
