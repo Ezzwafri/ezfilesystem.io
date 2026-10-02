@@ -1341,7 +1341,11 @@ function AdminPanel({ profiles, files, requests, addMember, resetMemberPassword,
                 </tr>
               </thead>
               <tbody>
-                {profiles.map(m => (
+                {profiles.slice().sort((a, b) => {
+                  const order = ["op", "partner", "lawyer"];
+                  const ai = order.indexOf(a.role), bi = order.indexOf(b.role);
+                  return (ai === -1 ? order.length : ai) - (bi === -1 ? order.length : bi);
+                }).map(m => (
                   <tr key={m.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
                     <td style={{ padding: "12px" }}>
                       {editId === m.id ? (
